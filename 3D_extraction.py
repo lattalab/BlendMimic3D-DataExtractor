@@ -7,12 +7,18 @@ import numpy as np
 
 HOME_FILE_PATH = os.path.abspath('homefile.blend')
 
-RESOLUTION = (1000, 1002)
+# This Resolution is for human 3.6
+# RESOLUTION = (1000, 1002)
+RESOLUTION = (1920, 1080)
 
 #Crucial joints sufficient for visualisation #FIX ME - Add more joints if desirable for MixamRig
-BASE_JOINT_NAMES = ['Hips', 'LeftUpLeg', 'LeftLeg', 'LeftFoot', 'RightUpLeg', 'RightLeg', 'RightFoot', 
-                    'Spine1', 'Neck','Head', 'HeadTop_End', 'RightArm', 'RightForeArm', 'RightHand', 
-                    'LeftArm', 'LeftForeArm', 'LeftHand',
+# [Modified] according to Rokoko Retargeting List
+BASE_JOINT_NAMES = [
+                    'Hips', 'Spine', 'Spine1', 'Spine2', 'Head', 'HeadTop_End',
+                    'LeftUpLeg', 'LeftLeg', 'LeftFoot', 
+                    'RightUpLeg', 'RightLeg', 'RightFoot', 
+                    'LeftShoulder', 'LeftArm', 'LeftForeArm', 'LeftHand',
+                    'RightShoulder', 'RightArm', 'RightForeArm', 'RightHand'
                     ]
 #Source directory where .fbx exist
 SRC_DATA_DIR ='regular'
@@ -55,7 +61,7 @@ def fbx2jointDict(joint_names, armature_name):
     for anim_name in anims_path:
         
         anim_file_path = os.path.join(SRC_DATA_DIR,anim_name)
-        save_dir = os.path.join(OUT_DATA_DIR,anim_name.split('.')[0],'JointDict')
+        save_dir = os.path.join(OUT_DATA_DIR,anim_name.split('.')[0],'jointDict')
         
         #Make save_dir
         if not os.path.exists(save_dir):
@@ -79,6 +85,9 @@ def fbx2jointDict(joint_names, armature_name):
             
             bone_struct = bpy.data.objects[armature_name].pose.bones
             armature = bpy.data.objects[armature_name]
+
+            # --- 加入下面這行來 Debug ---
+            # print("這隻角色的骨骼名稱有：", bone_struct.keys())
 
             out_dict = {'pose_keypoints_3d': []}
         
@@ -113,7 +122,7 @@ def jointDict2npy(subject):
             with open(file_path) as f:
                 info = json.load(f)
                 joint = np.array(info['pose_keypoints_3d']).reshape((-1, 3))
-            motion.append(joint[:17,:])
+            motion.append(joint[: ,:])
             
             
         motion = np.stack(motion,axis=2)
@@ -176,6 +185,7 @@ if __name__ == '__main__':
                
 
     #Number of joints to be used from MixamoRig
+    # format: mixamorig:<joint name>
     joint_names = ['mixamorig'+ joint_id +':' + x for x in BASE_JOINT_NAMES]
    
     #Convert .fbx files to JSON dict

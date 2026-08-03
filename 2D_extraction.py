@@ -33,6 +33,7 @@ def main():
     
     # Load motion data from NPZ file
     motion_file = f"../../BlendMimic3D/{subject}/D3_Positions/{action_name}/{action_name}.npz"
+
     motion_data = np.load(motion_file, allow_pickle=True)
     motion = motion_data['positions_3d']
 
@@ -65,9 +66,8 @@ def main():
     # Create the directory to save the NPZ file if it does not exist
     save_path = os.path.join(script_path, f"../../BlendMimic3D/{subject}/D2_Positions/{action_name}")
     os.makedirs(save_path, exist_ok=True)
-    np.savez_compressed(os.path.join(save_path, "2D_positions.npz"), Cam_0=positions_2d_dict['Camera_0'], Cam_1=positions_2d_dict['Camera_1'], Cam_2=positions_2d_dict['Camera_2'], Cam_3=positions_2d_dict['Camera_3'])
-    #np.savez_compressed(os.path.join(save_path, "2D_positions.npz"), Cam_0=positions_2d_dict['Camera_0'])
-    
+    # np.savez_compressed(os.path.join(save_path, "2D_positions.npz"), Cam_0=positions_2d_dict['Camera_0'], Cam_1=positions_2d_dict['Camera_1'], Cam_2=positions_2d_dict['Camera_2'], Cam_3=positions_2d_dict['Camera_3'])
+    np.savez_compressed(os.path.join(save_path, "2D_positions.npz"), Cam_0=positions_2d_dict['Camera_0'])
 
 if __name__ == "__main__":
     main()

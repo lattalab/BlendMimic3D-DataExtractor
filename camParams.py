@@ -2,6 +2,7 @@ import bpy
 from mathutils import Matrix, Vector, Quaternion
 import numpy as np
 import sys
+import os
 
 #---------------------------------------------------------------
 # 3x4 P matrix from Blender camera
@@ -173,9 +174,15 @@ if __name__ == "__main__":
 
     subject = argv[0]
 
+    # --- 新增以下這段防呆機制 ---
+    save_dir = f"../../BlendMimic3D/{subject}/Cameras"
+    if not os.path.exists(save_dir):
+        os.makedirs(save_dir)
+    # ---------------------------
     
     # List of camera names
-    camera_names = ['Camera_0', 'Camera_1', 'Camera_2', 'Camera_3'] #Same order as H3.6M dataset 
+    camera_names = ['Camera']   # default setting for 1 camera in blender
+    # camera_names = ['Camera_0', 'Camera_1', 'Camera_2', 'Camera_3'] #Same order as H3.6M dataset 
     #camera_names = ['Camera_0'] #Same order as H3.6M dataset 
     
     intrinsic_params_list = []
@@ -195,7 +202,7 @@ if __name__ == "__main__":
         print(RT)
            
         nP = np.matrix(P)
-        np.savetxt(f"../H3.6M_synthetic/{subject}/Cameras/CamView{i}_P3x4.txt", nP)  # to select precision, use e.g. fmt='%.2f'
+        np.savetxt(f"../../BlendMimic3D/{subject}/Cameras/CamView{i}_P3x4.txt", nP)  # to select precision, use e.g. fmt='%.2f'
 
         #Create a list to hold intrinsic parameter dictionaries for all cameras
         intrinsic_params = save_intrinsic_params_to_dict(cam)
@@ -229,9 +236,9 @@ if __name__ == "__main__":
     print(extrinsic_params_dict)
     print(K_list)
     # Save intrinsic and extrinsic parameters to npz file
-    np.savez(f"../H3.6M_synthetic/{subject}/Cameras/camera_params_{subject}.npz", intrinsic_params=intrinsic_params_list, extrinsic_params=extrinsic_params_dict)
+    np.savez(f"../../BlendMimic3D/{subject}/Cameras/camera_params_{subject}.npz", intrinsic_params=intrinsic_params_list, extrinsic_params=extrinsic_params_dict)
      # Save matrices K, RT, and P to another npz file
-    np.savez(f"../H3.6M_synthetic/{subject}/Cameras/matrices_{subject}.npz", K=K_list, RT=RT_list, P=P_list)
+    np.savez(f"../../BlendMimic3D/{subject}/Cameras/matrices_{subject}.npz", K=K_list, RT=RT_list, P=P_list)
 
     print("Data saved successfully.")
     
