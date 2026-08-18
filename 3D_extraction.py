@@ -2,6 +2,7 @@ import bpy
 import os
 import sys
 import json
+import shutil
 from mathutils import Vector
 import numpy as np 
 
@@ -29,28 +30,58 @@ OUT_DATA_DIR ='fbx2json'
 #Final directory where NPY files will ve stored
 #FINAL_DIR_PATH ='json2npy'
 
+def find_action_by_name(target_name):
+    """
+    Search for an action by exact match or substring containment.
+    Handles Rokoko/Retargeting prefixes and suffixes automatically.
+    """
+    target = target_name.lower()
+    
+    # 1. Exact match
+    if target_name in bpy.data.actions:
+        return bpy.data.actions[target_name]
+        
+    # 2. Substring match (e.g. 'runleap' matches 'Armature|runleap Retarget')
+    # In my example, the action name is '<bpy_struct, Action("Armature|Armature|walking2 Retarget") at 0x00000138CE1D3888>'
+    for act in bpy.data.actions:
+        # print(act.name.lower())
+        if target in act.name.lower():
+            return act
+            
+    return None
 
 def fbx2jointDict(joint_names, armature_name):
     
+    # #Remove 'Cube' object if exists in the scene
+    # if bpy.data.objects.get('Cube') is not None:
+    #     cube = bpy.data.objects['Cube']
+    #     bpy.data.objects.remove(cube)
     
-    #Remove 'Cube' object if exists in the scene
-    if bpy.data.objects.get('Cube') is not None:
-        cube = bpy.data.objects['Cube']
-        bpy.data.objects.remove(cube)
-    
-    #Intensify Light Point in the scene
-    if bpy.data.objects.get('Light') is not None:
-        bpy.data.objects['Light'].data.energy = 2
-        bpy.data.objects['Light'].data.type = 'POINT'
+    # #Intensify Light Point in the scene
+    # if bpy.data.objects.get('Light') is not None:
+    #     bpy.data.objects['Light'].data.energy = 2
+    #     bpy.data.objects['Light'].data.type = 'POINT'
     
     #Set resolution and it's rendering percentage
     bpy.data.scenes['Scene'].render.resolution_x = RESOLUTION[0]
     bpy.data.scenes['Scene'].render.resolution_y = RESOLUTION[1]
     bpy.data.scenes['Scene'].render.resolution_percentage = 100
     
-    #Base file for blender
-    bpy.ops.wm.save_as_mainfile(filepath=HOME_FILE_PATH)
-    
+    # #Base file for blender
+    # bpy.ops.wm.save_as_mainfile(filepath=HOME_FILE_PATH)
+
+    if armature_name in bpy.data.objects:
+        armature = bpy.data.objects[armature_name]
+    else:
+        armatures = [obj for obj in bpy.data.objects if obj.type == 'ARMATURE']
+        if armatures:
+            armature = armatures[0]
+            print(f"[*] Fallback: using detected armature '{armature.name}'")
+        else:
+            raise KeyError(f"No Armature found in current blend scene!")
+
+    bone_struct = armature.pose.bones
+
     #Get animation(.fbx) file paths
     anims_path = os.listdir(SRC_DATA_DIR)
   
@@ -59,36 +90,54 @@ def fbx2jointDict(joint_names, armature_name):
         os.makedirs(OUT_DATA_DIR)    
     
     for anim_name in anims_path:
+
+        # [Safely ignore]: ignore the `.gitkeep` file for maintan version control
+        if anim_name.startswith('.'):
+            continue
+
+        # Assume the <filename>.fbx is the same as the action name, otherwise, it will not find the action!
+        action_base_name = anim_name.split('.')[0]
+        action = find_action_by_name(action_base_name)
+
+        if action:
+            armature.animation_data.action = action
+            start_frame = int(action.frame_range[0])
+            end_frame = int(action.frame_range[1])
+            print(f"[*] Action: '{action.name}' (Frames {start_frame}-{end_frame})")
+        else:
+            print(f"[WARN] No action found for '{action_base_name}', skipping.")
+            continue
         
-        anim_file_path = os.path.join(SRC_DATA_DIR,anim_name)
-        save_dir = os.path.join(OUT_DATA_DIR,anim_name.split('.')[0],'jointDict')
+        # anim_file_path = os.path.join(SRC_DATA_DIR, anim_name)
+        save_dir = os.path.join(OUT_DATA_DIR, anim_name.split('.')[0], 'jointDict')
         
         #Make save_dir
-        if not os.path.exists(save_dir):
-            os.makedirs(save_dir)
+        if os.path.exists(save_dir):
+            shutil.rmtree(save_dir)
+        os.makedirs(save_dir, exist_ok=True)
         
-        #Load HOME_FILE and .fbx file
-        bpy.ops.wm.read_homefile(filepath=HOME_FILE_PATH)
-        bpy.ops.import_scene.fbx(filepath=anim_file_path)
+        # #Load HOME_FILE and .fbx file
+        # bpy.ops.wm.read_homefile(filepath=HOME_FILE_PATH)
+        # bpy.ops.import_scene.fbx(filepath=anim_file_path)
        
-        #End Frame Index for .fbx file
-        frame_end = bpy.data.actions[0].frame_range[1]
-        print(bpy.data.actions[0])
-        #print(bpy.data.actions[1])
-        print("Frames:")
-        print(frame_end)
-        
-        
-        for i in range(int(frame_end)):
+        # #End Frame Index for .fbx file
+        # frame_end = bpy.data.actions[0].frame_range[1]
+        # print(bpy.data.actions[0])
+        # #print(bpy.data.actions[1])
+        # print("Frames:", frame_end, sep=" ")
+
+        for i in range(start_frame, end_frame + 1):
            
-            bpy.context.scene.frame_set(i+1)
+            bpy.context.scene.frame_set(i)
             
-            bone_struct = bpy.data.objects[armature_name].pose.bones
-            armature = bpy.data.objects[armature_name]
+            # bone_struct = bpy.data.objects[armature_name].pose.bones
+            # armature = bpy.data.objects[armature_name]
 
-            # --- 加入下面這行來 Debug ---
-            # print("這隻角色的骨骼名稱有：", bone_struct.keys())
+            # --- Debug ---
+            # if (i == 1):
+                # print("Skeleton keys:", bone_struct.keys())
 
+            # store the keypoint coordinate
             out_dict = {'pose_keypoints_3d': []}
         
             for name in joint_names:
@@ -111,8 +160,13 @@ def jointDict2npy(subject):
     anim_names = os.listdir(json_dir)
    
     for anim_name in anim_names:
+
+        # [Safely ignore]: ignore the `.gitkeep` file for maintan version control
+        if anim_name.startswith('.'):
+            continue
+
         files_path = os.path.join(json_dir,anim_name,'jointDict')
-        frame_files = os.listdir(files_path)
+        frame_files = sorted([f for f in os.listdir(files_path) if f.endswith('.json')])
         
         motion = []
         
@@ -124,7 +178,7 @@ def jointDict2npy(subject):
                 joint = np.array(info['pose_keypoints_3d']).reshape((-1, 3))
             motion.append(joint[: ,:])
             
-            
+        # shape: (N, 3, T)    
         motion = np.stack(motion,axis=2)
         
         save_path = os.path.join(npz_dir,anim_name)
@@ -132,6 +186,7 @@ def jointDict2npy(subject):
             os.makedirs(save_path)
 
         print('Saving...')
+        # change to (T, N, 3)
         positions = motion.transpose(2, 0, 1)
         np.savez_compressed(os.path.join(save_path, anim_name + ".npz"), positions_3d=positions)
         
