@@ -32,11 +32,14 @@ def get_sensor_fit(sensor_fit, size_x, size_y):
 def get_calibration_matrix_K_from_blender(camd):
     if camd.type != 'PERSP':
         raise ValueError('Non-perspective cameras not supported')
+    
     scene = bpy.context.scene
-    f_in_mm = camd.lens
+    f_in_mm = camd.lens # focal length 焦距
+    # render image in resolution
     scale = scene.render.resolution_percentage / 100
     resolution_x_in_px = scale * scene.render.resolution_x
     resolution_y_in_px = scale * scene.render.resolution_y
+
     sensor_size_in_mm = get_sensor_size(camd.sensor_fit, camd.sensor_width, camd.sensor_height)
     sensor_fit = get_sensor_fit(
         camd.sensor_fit,
@@ -174,17 +177,21 @@ if __name__ == "__main__":
 
     subject = argv[0]
 
-    # --- 新增以下這段防呆機制 ---
+    # --- [Safe Coding] If the folder is not created, automatically invent one ---
     save_dir = f"../../BlendMimic3D/{subject}/Cameras"
     if not os.path.exists(save_dir):
         os.makedirs(save_dir)
     # ---------------------------
     
-    # List of camera names
-    camera_names = ['Camera']   # default setting for 1 camera in blender
+    # [Modified when needed] List of camera names, matching with your blender object name!
     # camera_names = ['Camera_0', 'Camera_1', 'Camera_2', 'Camera_3'] #Same order as H3.6M dataset 
     #camera_names = ['Camera_0'] #Same order as H3.6M dataset 
-    
+
+    # --- Dynamic fetch all camera objects ---
+    camera_names = [obj.name for obj in bpy.data.objects if obj.type == 'CAMERA']
+    camera_names.sort() 
+    print(f"Detected Cameras in Blender: {camera_names}")
+
     intrinsic_params_list = []
     extrinsic_params_list = []  # List to hold individual camera extrinsic parameter dictionaries for each subject
     K_list = []

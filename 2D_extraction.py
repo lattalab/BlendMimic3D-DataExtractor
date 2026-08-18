@@ -66,8 +66,20 @@ def main():
     # Create the directory to save the NPZ file if it does not exist
     save_path = os.path.join(script_path, f"../../BlendMimic3D/{subject}/D2_Positions/{action_name}")
     os.makedirs(save_path, exist_ok=True)
+
+    # [Adjust to your own settings]
     # np.savez_compressed(os.path.join(save_path, "2D_positions.npz"), Cam_0=positions_2d_dict['Camera_0'], Cam_1=positions_2d_dict['Camera_1'], Cam_2=positions_2d_dict['Camera_2'], Cam_3=positions_2d_dict['Camera_3'])
-    np.savez_compressed(os.path.join(save_path, "2D_positions.npz"), Cam_0=positions_2d_dict['Camera_0'])
+    # np.savez_compressed(os.path.join(save_path, "2D_positions.npz"), Cam_0=positions_2d_dict['Camera_0'])
+
+    # rename the camera name as new key, and store all valid camera
+    save_dict = {}
+    for key, value in positions_2d_dict.items():
+        new_key = key.replace('Camera_', 'Cam_')
+        save_dict[new_key] = value
+
+    # make use of `**save_dict` , write all camera coordinates to the NPZ file
+    np.savez_compressed(os.path.join(save_path, "2D_positions.npz"), **save_dict)
+    print(f"Successfully stored the following camera's 2D coordinates: {list(save_dict.keys())}")
 
 if __name__ == "__main__":
     main()

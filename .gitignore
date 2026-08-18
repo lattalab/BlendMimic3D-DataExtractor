@@ -1,4 +1,7 @@
-fbx2json/
-video/
-images/
-animation.blend
+fbx2json/*
+!fbx2json/.gitkeep
+video/*
+!video/.gitkeep
+images/*
+!images/.gitkeep
+*.blend
