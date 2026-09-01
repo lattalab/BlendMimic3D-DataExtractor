@@ -147,6 +147,8 @@ if __name__ == '__main__':
                 armature_name = argv[i + 1]
             elif argv[i] == "--subject":
                 subject = argv[i + 1]
+            elif argv[i] == "--action": 
+                action_name = argv[i + 1]
             elif argv[i] == "--start_frame":
                 start_frame = argv[i + 1]
             elif argv[i] == "--end_frame":
@@ -157,6 +159,12 @@ if __name__ == '__main__':
     joint_names = ['mixamorig'+ joint_id +':' + x for x in BASE_JOINT_NAMES]
     
     OUT_DATA_DIR = f"../../BlendMimic3D/{subject}/Occlusions"
+
+    # Create the directory to save the NPZ file if it does not exist
+    save_dir = os.path.join(OUT_DATA_DIR, action_name)
+    #Make save_dir
+    if not os.path.exists(save_dir):
+        os.makedirs(save_dir)
     
     # List of camera names
     # [Modified when needed] List of camera names, matching with your blender object name!
@@ -168,129 +176,102 @@ if __name__ == '__main__':
     armature = bpy.data.objects[armature_name]
     keypoints = armature.pose.bones
     bone_struct = bpy.data.objects[armature_name].pose.bones
-    
-  
-    #Get animation(.fbx) file paths
-    anims_path = os.listdir(SRC_DATA_DIR)
-    
-    #Make OUT_DATA_DIR
-    if not os.path.exists(OUT_DATA_DIR):
-        os.makedirs(OUT_DATA_DIR)
-        
-    for anim_name in anims_path:
-        # Replace 'start_frame' and 'end_frame' with the range of frames you want to process
-        # Find the action and assign it to the armature's active action
-        print(f"\n============================================")
-        print(anim_name.split('.')[0])
-        # [Notify] Under the action name, should be the same as the .fbx file name, otherwise, it will not find the action!
-        action = find_action_by_name(anim_name.split('.')[0])
+    action = armature.animation_data.action
 
-        if action:
-            armature.animation_data.action = action
-            start_frame = int(action.frame_range[0])
-            end_frame = int(action.frame_range[1])
-            print(f"[*] Successfully locked onto active action: '{action.name}'")
-            print(f"[*] Frames to process: {start_frame} to {end_frame}")
-        else:
-            print("No action found.")
+    start_frame = int(action.frame_range[0])
+    end_frame = int(action.frame_range[1])
+
+    # Create a dictionary to store 'prob' vectors for each camera
+    occlusions_dict = {}
+        
+    for cam_idx, cam_name in enumerate(camera_names):
+        print("\n--------------------------------------------")
+        print("camera name:", cam_name, sep=" ")
+        cam = bpy.data.objects.get(cam_name)
+        # each frame will have a 'prob' vector of size (20,) indicating visibility of each joint
+        prob = np.ones(( end_frame-start_frame+1 , num_joints))
+        print("start frame:", start_frame, sep=" ")
+
+        for frame in range(start_frame, end_frame + 1):
+            # Set the current frame
+            bpy.context.scene.frame_set(frame)
+
+            occluded_keypoints = []
+            out_of_view_keypoints = []
+            all_occlusions = []
+
+            # Iterate over the keypoints (bones) of the armature
+            for idx, name in enumerate(joint_names):
+                keypoint = armature.pose.bones[name]
+                global_location = armature.matrix_world @ bone_struct[name].matrix @ Vector((0, 0, 0))
                 
-        
-        save_dir = os.path.join(OUT_DATA_DIR, anim_name.split('.')[0])
-        #Make save_dir
-        if not os.path.exists(save_dir):
-            os.makedirs(save_dir)
-        
-        # Create a dictionary to store 'prob' vectors for each camera
-        occlusions_dict = {}
-        
-        for cam_idx, cam_name in enumerate(camera_names):
-            print("\n--------------------------------------------")
-            print("camera name:", cam_name, sep=" ")
-            cam = bpy.data.objects.get(cam_name)
-            # each frame will have a 'prob' vector of size (20,) indicating visibility of each joint
-            prob = np.ones(( end_frame-start_frame+1 , num_joints))
-            print("start frame:", start_frame, sep=" ")
-            for frame in range(start_frame, end_frame + 1):
-                # Set the current frame
-                bpy.context.scene.frame_set(frame)
+                # Check if the keypoint is out of the viewport
+                if is_keypoint_out_of_view(keypoint, global_location, cam):
+                    out_of_view_keypoints.append(keypoint.name)
+                    all_occlusions.append(keypoint.name)
+                    prob[frame-start_frame][idx] = 0
 
-                occluded_keypoints = []
-                out_of_view_keypoints = []
-                all_occlusions = []
+                # Check if the keypoint is occluded by any object in the scene
+                elif is_occluded(keypoint, global_location, cam, armature):
+                    # Keypoint is occluded
+                    occluded_keypoints.append(keypoint.name)
+                    all_occlusions.append(keypoint.name)
+                    prob[frame-start_frame][idx] = 0
+                
+                
+            #if occluded_keypoints:
+                #print("Occluded keypoints in frame", frame)
+                #for keypoint_name in occluded_keypoints:
+                    #print(keypoint_name)
+            #else:
+                #print("No occluded keypoints in frame", frame)
 
-                # Iterate over the keypoints (bones) of the armature
-                for idx, name in enumerate(joint_names):
-                    keypoint = armature.pose.bones[name]
-                    global_location = armature.matrix_world @ bone_struct[name].matrix @ Vector((0, 0, 0))
-                    
-                    # Check if the keypoint is out of the viewport
-                    if is_keypoint_out_of_view(keypoint, global_location, cam):
-                        out_of_view_keypoints.append(keypoint.name)
-                        all_occlusions.append(keypoint.name)
-                        prob[frame-start_frame][idx] = 0
+            #if out_of_view_keypoints:
+                #print("Out-of-view keypoints:")
+                #for keypoint_name in out_of_view_keypoints:
+                    #print(keypoint_name)
+            #else:
+                #print("All keypoints are within the camera's viewport.")
+            '''
+            if occluded_keypoints or out_of_view_keypoints:
+                print("\n")
+                print("Camera", cam_name)
+                print("Frame", frame)
+                print("List of non visible keypoints: ")
+                for keypoint_name in all_occlusions:
+                    print(keypoint_name)
+                print("---------------------------------------")
+                #exit(0)
+            '''
 
-                    # Check if the keypoint is occluded by any object in the scene
-                    elif is_occluded(keypoint, global_location, cam, armature):
-                        # Keypoint is occluded
-                        occluded_keypoints.append(keypoint.name)
-                        all_occlusions.append(keypoint.name)
-                        prob[frame-start_frame][idx] = 0
-                    
-                   
-                #if occluded_keypoints:
-                    #print("Occluded keypoints in frame", frame)
-                    #for keypoint_name in occluded_keypoints:
-                        #print(keypoint_name)
-                #else:
-                    #print("No occluded keypoints in frame", frame)
-
-                #if out_of_view_keypoints:
-                    #print("Out-of-view keypoints:")
-                    #for keypoint_name in out_of_view_keypoints:
-                        #print(keypoint_name)
-                #else:
-                    #print("All keypoints are within the camera's viewport.")
-                '''
-                if occluded_keypoints or out_of_view_keypoints:
-                    print("\n")
-                    print("Camera", cam_name)
-                    print("Frame", frame)
-                    print("List of non visible keypoints: ")
-                    for keypoint_name in all_occlusions:
-                        print(keypoint_name)
-                    print("---------------------------------------")
-                    #exit(0)
-                '''
-
-            # Save 'prob' vector for this camera to a separate NPZ file
-            print("End Frame", frame)
-            ''' # Get the absolute path of the script location
-            script_path = bpy.path.abspath("//")
-            # Create the directory to save the NPZ file if it does not exist
-            save_path = os.path.join(script_path, save_dir)
-            os.makedirs(save_path, exist_ok=True)
-                        
-            np.savez_compressed(os.path.join(save_path, f"occluded_kpt_Camera_{cam_idx}.npz"), prob=prob)'''
-                   
-            # Store the 2D positions in the dictionary with camera name as the key
-            occlusions_dict[f'Camera_{cam_idx}'] = prob 
-               
-        # Save 2D positions to another NPZ file
-        # Get the absolute path of the script location
+        # Save 'prob' vector for this camera to a separate NPZ file
+        print("End Frame", frame)
+        ''' # Get the absolute path of the script location
         script_path = bpy.path.abspath("//")
         # Create the directory to save the NPZ file if it does not exist
         save_path = os.path.join(script_path, save_dir)
         os.makedirs(save_path, exist_ok=True)
+                    
+        np.savez_compressed(os.path.join(save_path, f"occluded_kpt_Camera_{cam_idx}.npz"), prob=prob)'''
+                
+        # Store the 2D positions in the dictionary with camera name as the key
+        occlusions_dict[f'Camera_{cam_idx}'] = prob 
+            
+    # Save 2D positions to another NPZ file
+    # Get the absolute path of the script location
+    script_path = bpy.path.abspath("//")
+    save_path = os.path.join(script_path, save_dir)
+    os.makedirs(save_path, exist_ok=True)
 
-        # np.savez_compressed(os.path.join(save_path, "occluded_kpt.npz"), Cam_0=occlusions_dict['Camera_0'],  Cam_1=occlusions_dict['Camera_1'],  Cam_2=occlusions_dict['Camera_2'],  Cam_3=occlusions_dict['Camera_3'])
-        
-        # [Modify to dynamic judgment]
-        # rename the camera name as new key, and store all valid camera
-        save_dict = {}
-        for key, value in occlusions_dict.items():
-            new_key = key.replace('Camera_', 'Cam_')
-            save_dict[new_key] = value
+    # np.savez_compressed(os.path.join(save_path, "occluded_kpt.npz"), Cam_0=occlusions_dict['Camera_0'],  Cam_1=occlusions_dict['Camera_1'],  Cam_2=occlusions_dict['Camera_2'],  Cam_3=occlusions_dict['Camera_3'])
+    
+    # [Modify to dynamic judgment]
+    # rename the camera name as new key, and store all valid camera
+    save_dict = {}
+    for key, value in occlusions_dict.items():
+        new_key = key.replace('Camera_', 'Cam_')
+        save_dict[new_key] = value
 
-        # make use of `**save_dict` , write all camera coordinates to the NPZ file
-        np.savez_compressed(os.path.join(save_path, "occluded_kpt.npz"), **save_dict)
-        print(f"Successfully stored occlusion data for: {list(save_dict.keys())}")
+    # make use of `**save_dict` , write all camera coordinates to the NPZ file
+    np.savez_compressed(os.path.join(save_path, "occluded_kpt.npz"), **save_dict)
+    print(f"Successfully stored occlusion data for: {list(save_dict.keys())}")

@@ -50,7 +50,7 @@ def find_action_by_name(target_name):
             
     return None
 
-def fbx2jointDict(joint_names, armature_name):
+def fbx2jointDict(joint_names, armature_name, action_name):
     
     # #Remove 'Cube' object if exists in the scene
     # if bpy.data.objects.get('Cube') is not None:
@@ -70,160 +70,109 @@ def fbx2jointDict(joint_names, armature_name):
     # #Base file for blender
     # bpy.ops.wm.save_as_mainfile(filepath=HOME_FILE_PATH)
 
-    if armature_name in bpy.data.objects:
-        armature = bpy.data.objects[armature_name]
-    else:
-        armatures = [obj for obj in bpy.data.objects if obj.type == 'ARMATURE']
-        if armatures:
-            armature = armatures[0]
-            print(f"[*] Fallback: using detected armature '{armature.name}'")
-        else:
-            raise KeyError(f"No Armature found in current blend scene!")
-
+    armature = bpy.data.objects[armature_name]
     bone_struct = armature.pose.bones
 
-    #Get animation(.fbx) file paths
-    anims_path = os.listdir(SRC_DATA_DIR)
-  
-    #Make OUT_DATA_DIR
-    if not os.path.exists(OUT_DATA_DIR):
-        os.makedirs(OUT_DATA_DIR)    
+    # Get the action currently playing on this armature
+    action = armature.animation_data.action
+    start_frame = int(action.frame_range[0])
+    end_frame = int(action.frame_range[1])
+    print(f"[*] Locked Armature: '{armature.name}' | Action: '{action.name}' (Frames {start_frame}-{end_frame})")
+
+    # Setup directories
+    save_dir = os.path.join(OUT_DATA_DIR, action_name, 'jointDict')
+    if os.path.exists(save_dir):
+        shutil.rmtree(save_dir)
+    os.makedirs(save_dir, exist_ok=True)   
+
+    for i in range(start_frame, end_frame + 1):
+        
+        bpy.context.scene.frame_set(i)
+        
+        # bone_struct = bpy.data.objects[armature_name].pose.bones
+        # armature = bpy.data.objects[armature_name]
+
+        # --- Debug ---
+        # if (i == 1):
+            # print("Skeleton keys:", bone_struct.keys())
+
+        # store the keypoint coordinate
+        out_dict = {'pose_keypoints_3d': []}
     
-    for anim_name in anims_path:
-
-        # [Safely ignore]: ignore the `.gitkeep` file for maintan version control
-        if anim_name.startswith('.'):
-            continue
-
-        # Assume the <filename>.fbx is the same as the action name, otherwise, it will not find the action!
-        action_base_name = anim_name.split('.')[0]
-        action = find_action_by_name(action_base_name)
-
-        if action:
-            armature.animation_data.action = action
-            start_frame = int(action.frame_range[0])
-            end_frame = int(action.frame_range[1])
-            print(f"[*] Action: '{action.name}' (Frames {start_frame}-{end_frame})")
-        else:
-            print(f"[WARN] No action found for '{action_base_name}', skipping.")
-            continue
+        for name in joint_names:
+            global_location = armature.matrix_world @ bone_struct[name].matrix @ Vector((0, 0, 0))
+            l = [global_location[0], global_location[1], global_location[2]]
+            out_dict['pose_keypoints_3d'].extend(l)
         
-        # anim_file_path = os.path.join(SRC_DATA_DIR, anim_name)
-        save_dir = os.path.join(OUT_DATA_DIR, anim_name.split('.')[0], 'jointDict')
-        
-        #Make save_dir
-        if os.path.exists(save_dir):
-            shutil.rmtree(save_dir)
-        os.makedirs(save_dir, exist_ok=True)
-        
-        # #Load HOME_FILE and .fbx file
-        # bpy.ops.wm.read_homefile(filepath=HOME_FILE_PATH)
-        # bpy.ops.import_scene.fbx(filepath=anim_file_path)
-       
-        # #End Frame Index for .fbx file
-        # frame_end = bpy.data.actions[0].frame_range[1]
-        # print(bpy.data.actions[0])
-        # #print(bpy.data.actions[1])
-        # print("Frames:", frame_end, sep=" ")
+        save_path = os.path.join(save_dir,'%04d_keypoints.json'%i)
+        with open(save_path,'w') as f:
+            json.dump(out_dict, f)
 
-        for i in range(start_frame, end_frame + 1):
-           
-            bpy.context.scene.frame_set(i)
-            
-            # bone_struct = bpy.data.objects[armature_name].pose.bones
-            # armature = bpy.data.objects[armature_name]
-
-            # --- Debug ---
-            # if (i == 1):
-                # print("Skeleton keys:", bone_struct.keys())
-
-            # store the keypoint coordinate
-            out_dict = {'pose_keypoints_3d': []}
-        
-            for name in joint_names:
-                global_location = armature.matrix_world @ bone_struct[name].matrix @ Vector((0, 0, 0))
-                l = [global_location[0], global_location[1], global_location[2]]
-                out_dict['pose_keypoints_3d'].extend(l)
-            
-            save_path = os.path.join(save_dir,'%04d_keypoints.json'%i)
-            with open(save_path,'w') as f:
-                json.dump(out_dict, f)
-
-def jointDict2npy(subject):
+def jointDict2npy(subject, action_name):
     
     json_dir = OUT_DATA_DIR
     npz_dir = f"../../BlendMimic3D/{subject}/D3_Positions"
     
     if not os.path.exists(npz_dir):
         os.makedirs(npz_dir)
-        
-    anim_names = os.listdir(json_dir)
-   
-    for anim_name in anim_names:
 
-        # [Safely ignore]: ignore the `.gitkeep` file for maintan version control
-        if anim_name.startswith('.'):
-            continue
-
-        files_path = os.path.join(json_dir,anim_name,'jointDict')
-        frame_files = sorted([f for f in os.listdir(files_path) if f.endswith('.json')])
-        
-        motion = []
-        
-        for frame_file in frame_files:
-            file_path = os.path.join(files_path,frame_file)
-            
-            with open(file_path) as f:
-                info = json.load(f)
-                joint = np.array(info['pose_keypoints_3d']).reshape((-1, 3))
-            motion.append(joint[: ,:])
-            
-        # shape: (N, 3, T)    
-        motion = np.stack(motion,axis=2)
-        
-        save_path = os.path.join(npz_dir,anim_name)
-        if not os.path.exists(save_path):
-            os.makedirs(save_path)
-
-        print('Saving...')
-        # change to (T, N, 3)
-        positions = motion.transpose(2, 0, 1)
-        np.savez_compressed(os.path.join(save_path, anim_name + ".npz"), positions_3d=positions)
-        
-        print('Done.')
-
-        data = motion
-        print(data.shape)
-        reshaped_data = np.reshape(data, (data.shape[0], -1))
-        np.savetxt(save_path+'/'+'data3D.txt', reshaped_data, delimiter=' ') 
-        
-        ''' 
-        cdf_data = data.transpose(2, 0, 1)
-        # Define the attributes
-        attributes = {
-            'Version': '3.3.0',
-            'Encoding': 6,
-            'Majority': 'Column_major',
-            'zVariables': ['Pose'],
-            'Copyright': '\nCommon Data Format (CDF)\n(C) Copyright 1990-2009 NASA/GSFC\nSpace Physics Data Facility\nNASA/Goddard Space Flight Center\nGreenbelt, Maryland 20771 USA\n(Internet -- CDFSUPPORT@LISTSERV.GSFC.NASA.GOV)\n',
-        }
-
-        # Create a CDF file and open it for writing
-        filename = 'data.cdf'
-        cdffile = cdflib.CDF(filename, '')
-
-        # Write the data to the CDF file
-        cdffile.write(data)
-
-        # Set the CDF attributes
-        cdffile.attrs.update(attributes)
-
-        # Close the CDF file
-        cdffile.close()
-        '''
+    files_path = os.path.join(json_dir, action_name, 'jointDict')
+    frame_files = sorted([f for f in os.listdir(files_path) if f.endswith('.json')])
     
+    motion = []
         
+    for frame_file in frame_files:
+        file_path = os.path.join(files_path,frame_file)
+        
+        with open(file_path) as f:
+            info = json.load(f)
+            joint = np.array(info['pose_keypoints_3d']).reshape((-1, 3))
+        motion.append(joint[: ,:])
+        
+    # shape: (N, 3, T)    
+    motion = np.stack(motion,axis=2)
+    
+    save_path = os.path.join(npz_dir, action_name)
+    if not os.path.exists(save_path):
+        os.makedirs(save_path)
 
+    print('Saving...')
+    # change to (T, N, 3)
+    positions = motion.transpose(2, 0, 1)
+    np.savez_compressed(os.path.join(save_path, action_name + ".npz"), positions_3d=positions)
+    
+    print('Done.')
+
+    data = motion
+    print(data.shape)
+    reshaped_data = np.reshape(data, (data.shape[0], -1))
+    np.savetxt(save_path+'/'+'data3D.txt', reshaped_data, delimiter=' ') 
+    
+    ''' 
+    cdf_data = data.transpose(2, 0, 1)
+    # Define the attributes
+    attributes = {
+        'Version': '3.3.0',
+        'Encoding': 6,
+        'Majority': 'Column_major',
+        'zVariables': ['Pose'],
+        'Copyright': '\nCommon Data Format (CDF)\n(C) Copyright 1990-2009 NASA/GSFC\nSpace Physics Data Facility\nNASA/Goddard Space Flight Center\nGreenbelt, Maryland 20771 USA\n(Internet -- CDFSUPPORT@LISTSERV.GSFC.NASA.GOV)\n',
+    }
+
+    # Create a CDF file and open it for writing
+    filename = 'data.cdf'
+    cdffile = cdflib.CDF(filename, '')
+
+    # Write the data to the CDF file
+    cdffile.write(data)
+
+    # Set the CDF attributes
+    cdffile.attrs.update(attributes)
+
+    # Close the CDF file
+    cdffile.close()
+    '''
+    
         
 if __name__ == '__main__':
     
@@ -237,6 +186,8 @@ if __name__ == '__main__':
                 armature_name = argv[i + 1]
             elif argv[i] == "--subject":
                 subject = argv[i + 1]
+            elif argv[i] == "--action": 
+                action_name = argv[i + 1]
                
 
     #Number of joints to be used from MixamoRig
@@ -244,10 +195,10 @@ if __name__ == '__main__':
     joint_names = ['mixamorig'+ joint_id +':' + x for x in BASE_JOINT_NAMES]
    
     #Convert .fbx files to JSON dict
-    fbx2jointDict(joint_names, armature_name)
+    fbx2jointDict(joint_names, armature_name, action_name)
     
     #Convert JSON dict to NPY 
-    jointDict2npy(subject)   
+    jointDict2npy(subject, action_name)   
 
          
 

@@ -45,10 +45,47 @@ done
 # ==========================================
 # 3. Check required parameters
 # ==========================================
-if [ -z "$ACTION_NAME" ]; then
-    echo "[Error] required parameter missing: action_name (-a or --action)！"
-    echo "Enter \"./run.sh -h\" for help."
-    exit 1
+# 缺乏必要參數的時候
+if [ -z "$ACTION_NAME" ] || [ -z "$ARMATURE_NAME" ]; then
+    echo "=========================================="
+    echo "[AUTO MODE] Scanning scene: $BLEND_FILE"
+    echo "=========================================="
+
+    # Fetch target armatures and actions from the Blender file
+    DETECTED_TARGETS=$("$BLENDER_PATH" --background "$BLEND_FILE" --python ActionDetect.py | tr -d '\r' | grep "^TARGET:")
+
+    if [ -z "$DETECTED_TARGETS" ]; then
+        echo "[Error] No active Armatures with Actions found in $BLEND_FILE!"
+        exit 1
+    fi
+
+    SUBJECT_COUNT=1
+    for target in $DETECTED_TARGETS; do
+        # Parse TARGET:Armature:Action
+        DETECTED_ARM=$(echo "$target" | cut -d':' -f2)
+        DETECTED_ACT=$(echo "$target" | cut -d':' -f3)
+
+        # If specified subject is empty, assign a default subject name based on the count
+        if [ -n "$SUBJECT" ]; then
+            TARGET_SUB="$SUBJECT"
+        else
+            TARGET_SUB="S${SUBJECT_COUNT}"
+        fi
+
+        echo -e "\n------------------------------------------"
+        echo ">> Auto Dispatch: Subject=$TARGET_SUB | Armature=$DETECTED_ARM | Action=$DETECTED_ACT"
+        echo "------------------------------------------"
+
+        # recursively call run.sh with detected parameters
+        "$0" -b "$BLEND_FILE" -r "$DETECTED_ARM" -a "$DETECTED_ACT" -s "$TARGET_SUB" -j "$JOINT_ID"
+
+        SUBJECT_COUNT=$((SUBJECT_COUNT + 1))
+    done
+
+    echo -e "\n=========================================="
+    echo "[AUTO MODE] All detected subjects processed successfully!"
+    echo "=========================================="
+    exit 0
 fi
 
 # ==========================================
@@ -62,7 +99,7 @@ echo "=========================================="
 
 # The following command follow the guideline.
 echo -e "\n[1/5] Extracting 3D skeleton data..."
-"$BLENDER_PATH" --background "$BLEND_FILE" --python 3D_extraction.py -- --joint-id "$JOINT_ID" --armature-name "$ARMATURE_NAME" --subject "$SUBJECT"
+"$BLENDER_PATH" --background "$BLEND_FILE" --python 3D_extraction.py -- --joint-id "$JOINT_ID" --armature-name "$ARMATURE_NAME" --subject "$SUBJECT" --action "$ACTION_NAME"
 
 echo -e "\n[2/5] Extracting camera parameters..."
 "$BLENDER_PATH" --background "$BLEND_FILE" --python camParams.py -- "$SUBJECT"
@@ -71,7 +108,7 @@ echo -e "\n[3/5] Calculating 2D projection coordinates..."
 "$BLENDER_PATH" --background "$BLEND_FILE" --python 2D_extraction.py -- "$SUBJECT" "$ACTION_NAME"
 
 echo -e "\n[4/5] Handling Occlusion ..."
-"$BLENDER_PATH" --background "$BLEND_FILE" --python occlusion.py -- --joint-id "$JOINT_ID" --armature-name "$ARMATURE_NAME" --subject "$SUBJECT"
+"$BLENDER_PATH" --background "$BLEND_FILE" --python occlusion.py -- --joint-id "$JOINT_ID" --armature-name "$ARMATURE_NAME" --subject "$SUBJECT" --action "$ACTION_NAME"
 
 # homefile.blend
 echo -e "\n[5/5] Cleaning up the environment..."
