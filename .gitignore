@@ -5,3 +5,4 @@ video/*
 images/*
 !images/.gitkeep
 *.blend
+*.avi

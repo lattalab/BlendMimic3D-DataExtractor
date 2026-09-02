@@ -16,7 +16,6 @@ SUBJECT="S1"
 TEMP_FILE="homefile.blend"
 BLEND_FILE="animation.blend"
 
-
 # ==========================================
 # 2. If you want to use command line arguments, you can specify them here
 # ==========================================
@@ -42,6 +41,10 @@ while [[ "$#" -gt 0 ]]; do
     shift
 done
 
+# [Add] MetaData files for manage subjects order
+SCENE_DIR="../../BlendMimic3D/${SUBJECT}"
+META_FILE="${SCENE_DIR}/subjects.txt"
+
 # ==========================================
 # 3. Check required parameters
 # ==========================================
@@ -50,6 +53,12 @@ if [ -z "$ACTION_NAME" ] || [ -z "$ARMATURE_NAME" ]; then
     echo "=========================================="
     echo "[AUTO MODE] Scanning scene: $BLEND_FILE"
     echo "=========================================="
+
+    # Create the scene directory and initialize the metadata file
+    mkdir -p "$SCENE_DIR"
+    # Create empty metadata file
+    > "$META_FILE"
+    echo "[*] Initialized metadata file: $META_FILE"
 
     # Fetch target armatures and actions from the Blender file
     DETECTED_TARGETS=$("$BLENDER_PATH" --background "$BLEND_FILE" --python ActionDetect.py | tr -d '\r' | grep "^TARGET:")
@@ -71,6 +80,10 @@ if [ -z "$ACTION_NAME" ] || [ -z "$ARMATURE_NAME" ]; then
         else
             TARGET_SUB="S${SUBJECT_COUNT}"
         fi
+
+        # register this action to the metadata file (append mode)
+        echo "$DETECTED_ACT" >> "$META_FILE"
+        echo "[+] Registered Subject S${SUBJECT_COUNT} -> Action: $DETECTED_ACT in metadata."
 
         echo -e "\n------------------------------------------"
         echo ">> Auto Dispatch: Subject=$TARGET_SUB | Armature=$DETECTED_ARM | Action=$DETECTED_ACT"

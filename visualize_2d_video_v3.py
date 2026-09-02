@@ -2,6 +2,7 @@ import numpy as np
 import cv2
 import os
 import argparse  
+import re
 
 # sample usage
 # python3 visualize_2d_video_v3.py --cam Cam_0 --img_folder images/side_view --output Cam0_visualization.avi
@@ -16,15 +17,75 @@ SKELETON_CONNECTIONS = [
     (3, 16), (16, 17), (17, 18), (18, 19)     # 右手: Spine2 -> RightShoulder -> RightArm -> RightForeArm -> RightHand
 ]
 
+def natural_sort_key(s):
+    """Ensure natural sorting: 1.png < 2.png < 10.png."""
+    return [int(text) if text.isdigit() else text.lower() for text in re.split(r'(\d+)', s)]
+
+def draw_label(img, text, pos, bg_color=None, text_color=None):
+    """Draw a readable label without forcing a black background.
+
+    If bg_color is None, the label is drawn as transparent text with a contrasting outline.
+    If the text color is not given, it is chosen based on the local image brightness to
+    remain readable on most backgrounds.
+    """
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    scale = 0.9
+    thickness = 2
+    outline_thickness = 5
+
+    # Calculate the size of the text to be drawn
+    (t_w, t_h), _ = cv2.getTextSize(text, font, scale, thickness)
+    x, y = pos
+
+    # text anchor near the top center of the joint cluster
+    text_x = x - t_w // 2
+    text_y = y - 10
+
+    # keep inside image bounds
+    h, w, _ = img.shape
+    text_x = max(0, min(w - t_w, text_x))
+    text_y = max(t_h, min(h, text_y))
+
+    # auto choose text color by local image brightness (works even without knowing background)
+    if text_color is None:
+        pad = 20
+        x0 = max(0, text_x - pad)
+        x1 = min(w, text_x + t_w + pad)
+        y0 = max(0, text_y - t_h - pad)
+        y1 = min(h, text_y + pad)
+        local_patch = img[y0:y1, x0:x1]
+        if local_patch.size > 0:
+            luminance = np.mean(cv2.cvtColor(local_patch, cv2.COLOR_BGR2GRAY))
+        else:
+            luminance = 127.5
+        text_color = (30, 30, 30) if luminance > 127 else (245, 245, 245)
+
+    outline_color = (0, 0, 0) if text_color[0] > 180 or text_color[1] > 180 or text_color[2] > 180 else (255, 255, 255)
+
+    if bg_color is not None:
+        # allow the old solid box behavior if needed
+        x1 = max(0, text_x - 8)
+        y1 = max(0, text_y - t_h - 8)
+        x2 = min(w, text_x + t_w + 8)
+        y2 = min(h, text_y + 8)
+        cv2.rectangle(img, (x1, y1), (x2, y2), bg_color, -1)
+        cv2.putText(img, text, (text_x, text_y), font, scale, text_color, thickness, cv2.LINE_AA)
+    else:
+        # outline version: text remains visible regardless of background
+        cv2.putText(img, text, (text_x, text_y), font, scale, outline_color, outline_thickness, cv2.LINE_AA)
+        cv2.putText(img, text, (text_x, text_y), font, scale, text_color, thickness, cv2.LINE_AA)
+
 def main():
     # --- 1. Setup Command Line Arguments ---
     parser = argparse.ArgumentParser(description="Visualize 2D poses on rendered images.")
     
     # Set up the argument value
-    # 2D npz file location
-    parser.add_argument("--npz", type=str, nargs='+', default=["../../BlendMimic3D/S1/D2_Positions/Walking2/2D_positions.npz"], help="Path to the 2D coordinates NPZ file.")
-    # Occlusion arguments
-    parser.add_argument("--occ_npz", type=str, nargs='+', default=["../../BlendMimic3D/S1/Occlusions/Walking2/occluded_kpt.npz"], help="(Optional) Path to the occlusion NPZ file (e.g., occluded_kpt.npz).")
+    # # 2D npz file location
+    # parser.add_argument("--npz", type=str, nargs='+', default=["../../BlendMimic3D/S1/D2_Positions/Walking2/2D_positions.npz"], help="Path to the 2D coordinates NPZ file.")
+    # # Occlusion arguments
+    # parser.add_argument("--occ_npz", type=str, nargs='+', default=["../../BlendMimic3D/S1/Occlusions/Walking2/occluded_kpt.npz"], help="(Optional) Path to the occlusion NPZ file (e.g., occluded_kpt.npz).")
+    # 改由 root path 統一讀取
+    parser.add_argument("--scene_dir", type=str, required=True, default="../../BlendMimic3D/S1" ,help="Path to the directory containing 2D coordinates NPZ files for all subjects.")
     parser.add_argument("--hide_occluded", action="store_true", help="(Optional) If set, occluded points will NOT be drawn. Otherwise, they will be drawn in red.")
     # select camera
     parser.add_argument("--cam", type=str, required=True, help="Target Camera name EX: Cam_0 OR Cam_1")
@@ -32,19 +93,31 @@ def main():
     parser.add_argument("--img_folder", type=str, required=True, help="Path to the folder containing rendered images.")
     # output filename
     parser.add_argument("--output", type=str, default="pose_visualization.avi", help="Output video filename.")
-    
+    # show the subject label (specified to show)
+    parser.add_argument("-s", "--subject", action="store_true", help="(Optional) If set, the subject label will be drawn on the video.")
+
     args = parser.parse_args()
 
+    # To measure the order of subjects, read the metadata file to get the action names in order
+    metadata_file = os.path.join(args.scene_dir, "subjects.txt")
+    if not os.path.exists(metadata_file):
+        print(f"[ERROR] Metadata file not found: {metadata_file}")
+        return
+
+    with open(metadata_file, 'r') as f:
+        action_names = [line.strip() for line in f if line.strip()]
+
     # Store the argument
-    npz_path = args.npz
-    occ_npz_path = args.occ_npz
+    npz_path = [os.path.join(args.scene_dir, "D2_Positions", act, "2D_positions.npz") for act in action_names]
+    occ_npz_path = [os.path.join(args.scene_dir, "Occlusions", act, "occluded_kpt.npz") for act in action_names]
     hide_occluded = args.hide_occluded
     cam_name = args.cam
     img_folder = args.img_folder
     output_video_path = args.output
+    show_subject_label = args.subject
     
     # --- 2. Load the 2D poses ---
-    num_people = len(args.npz)
+    num_people = len(action_names)
     poses_2d_list = []
     visibilities_list = []
     max_frames = 0
@@ -86,14 +159,19 @@ def main():
                         print(f"[WARN] Frame count mismatch! 2D: {current_frames}, Occ: {visibilities.shape[0]}. Disabling occlusion.")
                         visibilities = None
                     else:
-                        print(f"[*] Successfully loaded occlusion data for subject {p_idx + 1}. Mode: {'HIDE' if hide_occluded else 'RED DOTS'}")
+                        print(f"[*] Successfully loaded occlusion data for subject {p_idx + 1}:{action_names[p_idx]}. Mode: {'HIDE' if hide_occluded else 'RED DOTS'}")
 
         visibilities_list.append(visibilities)
 
     # --- 4. Setup Image Sequence & Video Writer ---
     # Assume the images are stored with `png` file extenstion
     # the filename is like <name><frame_number>.png, e.g., test0001.png, test0002.png, ...
-    image_files = sorted([f for f in os.listdir(img_folder) if f.endswith('.png')])
+    # image_files = sorted([f for f in os.listdir(img_folder) if f.endswith('.png')])
+
+    image_files = sorted(
+        [f for f in os.listdir(args.img_folder) if f.lower().endswith(('.png', '.jpg'))],
+        key=natural_sort_key
+    )
 
     if not image_files:
         print(f"[ERROR] Cannot find any PNG images in folder: {img_folder}")
@@ -184,6 +262,21 @@ def main():
                     dot_color = (0, 255, 0) if is_visible == 1 else (0, 0, 255)
                     cv2.circle(img, (x, y), radius=7, color=(255, 255, 255), thickness=-1) # White border for better visibility
                     cv2.circle(img, (x, y), radius=5, color=dot_color, thickness=-1)       # Inner dot color based on visibility
+
+            # --- 5-3. Draw Subject Label ---
+            # draw when the all keypoints is visible
+            valid_joints = current_pose[(current_pose[:, 0] > 0) & (current_pose[:, 1] > 0)]
+
+            if show_subject_label and len(valid_joints) > 0:
+                # Calculate the bounding box of the valid joints
+                min_x, min_y = np.min(valid_joints, axis=0)
+                max_x, max_y = np.max(valid_joints, axis=0)
+                
+                # Position the label above the bounding box
+                label_x = int((min_x + max_x) / 2)
+                label_y = int(min_y) - 10  # 10 pixels above the top joint
+                
+                draw_label(img, f"S{p_idx + 1}", (label_x, label_y))
                 
         # 6. Write the processed frame to the video file
         out.write(img)
