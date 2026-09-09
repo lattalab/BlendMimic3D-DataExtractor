@@ -30,11 +30,22 @@ def get_sensor_fit(sensor_fit, size_x, size_y):
 # as well as
 # https://blender.stackexchange.com/a/120063/3581
 def get_calibration_matrix_K_from_blender(camd):
-    if camd.type != 'PERSP':
-        raise ValueError('Non-perspective cameras not supported')
+    # support:
+    # perspective cameras in EEVEE engine or CYCLE engine.
+    # panoramic cameras (fisheye Equisolid) in cycles engine.
+    if camd.type not in ('PERSP', 'PANO'):
+        raise ValueError(f"Unsupported camera type: {camd.type}")
     
     scene = bpy.context.scene
-    f_in_mm = camd.lens # focal length 焦距
+    # f_in_mm = camd.lens # focal length 焦距
+
+    if camd.type == 'PANO':
+        # check cycle engine and fisheye camera lens
+        f_in_mm = getattr(camd, 'fisheye_lens', camd.lens)
+    else:
+        # perspective camera
+        f_in_mm = camd.lens  
+
     # render image in resolution
     scale = scene.render.resolution_percentage / 100
     resolution_x_in_px = scale * scene.render.resolution_x
@@ -197,6 +208,7 @@ if __name__ == "__main__":
     K_list = []
     RT_list = []
     P_list = []
+    camera_types_list = []  # Record the camera types for each camera
     extrinsic_params_dict = {}
     i=0
     
@@ -207,6 +219,13 @@ if __name__ == "__main__":
         
         print(K)
         print(RT)
+
+        # [ADD] record camera type for each camera
+        if cam.data.type == 'PANO' and getattr(cam.data, 'panorama_type', '') == 'FISHEYE_EQUISOLID':
+            cam_type = 'FISHEYE_EQUISOLID'
+        else:
+            cam_type = 'PERSP'
+        camera_types_list.append(cam_type)
            
         nP = np.matrix(P)
         np.savetxt(f"../../BlendMimic3D/{subject}/Cameras/CamView{i}_P3x4.txt", nP)  # to select precision, use e.g. fmt='%.2f'
@@ -242,17 +261,12 @@ if __name__ == "__main__":
     print(intrinsic_params_list)
     print(extrinsic_params_dict)
     print(K_list)
+    print(camera_types_list)
     # Save intrinsic and extrinsic parameters to npz file
     np.savez(f"../../BlendMimic3D/{subject}/Cameras/camera_params_{subject}.npz", intrinsic_params=intrinsic_params_list, extrinsic_params=extrinsic_params_dict)
      # Save matrices K, RT, and P to another npz file
-    np.savez(f"../../BlendMimic3D/{subject}/Cameras/matrices_{subject}.npz", K=K_list, RT=RT_list, P=P_list)
+    np.savez(f"../../BlendMimic3D/{subject}/Cameras/matrices_{subject}.npz", K=K_list, RT=RT_list, P=P_list, types=camera_types_list)
 
     print("Data saved successfully.")
     
    
-
-
-
-   
-
-  

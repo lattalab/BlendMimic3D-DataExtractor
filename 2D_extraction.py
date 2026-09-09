@@ -4,7 +4,7 @@ import os
 import sys
 import bpy
 
-# Function to compute 2D positions
+# Function to compute 2D positions (Perspective camera model)
 def compute_2d_positions(motion, K, RT):
     # Convert 3D motion to homogeneous coordinates (4xN)
     motion_homo = np.concatenate((motion, np.ones((1, motion.shape[1]))), axis=0)
@@ -16,6 +16,43 @@ def compute_2d_positions(motion, K, RT):
     # Convert homogeneous coordinates to 2D positions (x, y) by dividing by the last element (w)
     proj_2d = proj_homo[:2, :] / proj_homo[2, :]
 
+    return proj_2d
+
+# [ADD] Function to compute 2D positions for Fisheye Equisolid camera
+def compute_2d_positions_fisheye_equisolid(motion, K, RT):
+    # Convert 3D motion to homogeneous coordinates (4xN)
+    motion_homo = np.concatenate((motion, np.ones((1, motion.shape[1]))), axis=0)
+
+    # Transform 3D points to Camera coordinates (3xN)
+    pt_cam = RT @ motion_homo
+
+    Xc = pt_cam[0, :]
+    Yc = pt_cam[1, :]
+    Zc = pt_cam[2, :]
+
+    # Extract intrinsic parameters from K
+    fx = K[0][0]
+    fy = K[1][1]
+    cx = K[0][2]
+    cy = K[1][2]
+
+    # Calculate distance d from optical axis and incident angle theta
+    d = np.sqrt(Xc**2 + Yc**2)
+    theta = np.arctan2(d, Zc)
+
+    # Safe division to prevent division by zero when point is on the optical axis
+    d_safe = np.where(d > 1e-7, d, 1e-7)
+
+    # Equisolid model: r = 2 * f * sin(theta / 2)
+    radius = np.where(d > 1e-7, (2.0 * np.sin(theta / 2.0)) / d_safe, 0.0)
+
+    # Map to 2D image coordinates (mask invalid points behind the camera)
+    # polar coordinates
+    valid_mask = Zc > 0
+    u = np.where(valid_mask, cx + (Xc * radius * fx), -1.0)
+    v = np.where(valid_mask, cy + (Yc * radius * fy), -1.0)
+
+    proj_2d = np.stack([u, v], axis=0)
     return proj_2d
 
 def main():
@@ -44,14 +81,21 @@ def main():
     # Assuming cam_params is a dictionary with 'K' (intrinsic matrix) and 'RT' (extrinsic matrix)
     K_list = cam_params['K']
     RT_list = cam_params['RT']
+    # [ADD] Load camera types (fallback to 'PERSP' if not present)
+    types_list = cam_params['types'] if 'types' in cam_params else ['PERSP'] * len(K_list)
     
     # Create a dictionary to hold 2D positions for each camera
     positions_2d_dict = {}
-    for cam_idx, (K, RT) in enumerate(zip(K_list, RT_list)):
+    for cam_idx, (K, RT, cam_type) in enumerate(zip(K_list, RT_list, types_list)):
         # Compute 2D positions for each frame
         positions_2d_frames = []
         for motion_frame in motion:
-            proj_2d = compute_2d_positions(motion_frame.T, K, RT)
+            # [ADD] Route projection based on camera type
+            if cam_type == 'FISHEYE_EQUISOLID':
+                proj_2d = compute_2d_positions_fisheye_equisolid(motion_frame.T, K, RT)
+            else:
+                proj_2d = compute_2d_positions(motion_frame.T, K, RT)
+
             positions_2d_frames.append(proj_2d.T)
            
         # Convert the list of 2D positions to a NumPy array of shape (N, 17, 2)

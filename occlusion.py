@@ -37,23 +37,44 @@ def remove_trailing_numbers(bone_name):
 
     return result                   
 
-def is_keypoint_out_of_view(keypoint, keypoint_location, camera):
+# Perspective camera model detection
+def is_keypoint_out_of_view(keypoint, keypoint_location, camera, is_fisheye=False):
     scene = bpy.context.scene
+
     #camera = bpy.context.scene.camera
     
     # Get the 3D location of the keypoint
     #keypoint_location = keypoint.matrix @ bpy.context.object.matrix_world @ keypoint.location
 
-    # Project the 3D location of the keypoint onto the camera's image plane
-    projected_co = bpy_extras.object_utils.world_to_camera_view(scene, camera, keypoint_location)
+    if is_fisheye:
+        # Get the camera view matrix for the current frame
+        mat_cam_inv = camera.matrix_world.inverted()
+        # Transform to camera sensor space
+        p_cam = mat_cam_inv @ keypoint_location
 
-    # Check if the projected 2D point is outside the image boundaries
-    if 0 <= projected_co.x <= 1 and 0 <= projected_co.y <= 1 and projected_co.z > 0:
-        # The keypoint is within the camera's viewport
-        return False
+        # Blender camera looks along -Z axis; depth is along the negative Z direction
+        z_depth = -p_cam.z
+        if z_depth <= 0:
+            return True  # The keypoint is behind the camera
+
+        # Calculate incident angle theta from optical axis
+        d = np.sqrt(p_cam.x**2 + p_cam.y**2)
+        theta = np.arctan2(d, z_depth)
+
+        # Check if incident angle exceeds 180-degree hemispherical FOV (theta > 90 degrees)
+        # fisheye is at most +90 or -90 degrees, so if theta > 90 degrees, it is out of view
+        return theta > (np.pi / 2.0)
     else:
-        # The keypoint is outside the camera's viewport
-        return True
+        # Project the 3D location of the keypoint onto the camera's image plane
+        projected_co = bpy_extras.object_utils.world_to_camera_view(scene, camera, keypoint_location)
+
+        # Check if the projected 2D point is outside the image boundaries
+        if 0 <= projected_co.x <= 1 and 0 <= projected_co.y <= 1 and projected_co.z > 0:
+            # The keypoint is within the camera's viewport
+            return False
+        else:
+            # The keypoint is outside the camera's viewport
+            return True
 
 def is_self_mesh(hit_object, armature):
     """
@@ -192,6 +213,11 @@ if __name__ == '__main__':
         prob = np.ones(( end_frame-start_frame+1 , num_joints))
         print("start frame:", start_frame, sep=" ")
 
+        # detect for camera type
+        cycles_cam = getattr(cam.data, 'cycles', None)
+        is_fisheye = (cam.data.type == 'PANO' and 
+                      getattr(cam.data, 'panorama_type', '') == 'FISHEYE_EQUISOLID')
+        
         for frame in range(start_frame, end_frame + 1):
             # Set the current frame
             bpy.context.scene.frame_set(frame)
@@ -206,7 +232,7 @@ if __name__ == '__main__':
                 global_location = armature.matrix_world @ bone_struct[name].matrix @ Vector((0, 0, 0))
                 
                 # Check if the keypoint is out of the viewport
-                if is_keypoint_out_of_view(keypoint, global_location, cam):
+                if is_keypoint_out_of_view(keypoint, global_location, cam, is_fisheye):
                     out_of_view_keypoints.append(keypoint.name)
                     all_occlusions.append(keypoint.name)
                     prob[frame-start_frame][idx] = 0

@@ -83,16 +83,16 @@ def configure_engine(scene, engine):
         # ---------------------------------------------------------
         # 1. Render Sampling
         scene.cycles.use_adaptive_sampling = False      # 關閉 Noise Threshold
-        scene.cycles.samples = 36                       # Max Samples: 36 (可依需求改為 32)
+        scene.cycles.samples = 12                       # Max Samples: 36 (可依需求改為 32)
         scene.cycles.adaptive_min_samples = 0           # Min Samples: 0
         scene.cycles.time_limit = 0                     # Time Limit: 0s (無限制)
         scene.cycles.use_denoising = True               # 啟用降噪 (Denoise)
         
         # 2. Viewport Sampling (預覽時的取樣數)
-        scene.cycles.preview_samples = 32
+        scene.cycles.preview_samples = 16
 
         # 3. Light Paths / Max Bounces (光線反彈次數，降低可減少運算負擔)
-        scene.cycles.max_bounces = 8                    # Total
+        scene.cycles.max_bounces = 2                    # Total
         
         print("[*] Cycles sampling and bounce optimization parameters applied.")
             
