@@ -18,97 +18,99 @@ Blender can be downloaded from the [official website](https://www.blender.org/do
 
 ### Reference Environment
 - Blender 5.1.2
-- Python 3.13.11
-- WSL
-```bash
-$ wsl --install -d Ubuntu-24.04
-$ sudo apt update
-```
-- Anaconda or other Virtual Environment (Not Necessary)
+- WSL Ubuntu Bash and Linux Python with NumPy, PyYAML, and OpenCV
+- Windows `blender.exe` launched from WSL; Blender uses its bundled Python.
+- The controller environment is specified in `environment.yml`.
 
 ## Contents
 
 ### Annotation Parts
-- `run.sh`: Automated pipeline script coordinating all extraction stages in a single command, featuring an auto-detection `fallback` mode.
+- `run.sh`: Sequential Scene, Action, and animated FBX batch controller.
+- `generate_dataset.py`: Single-sample controller with isolated Run workspace.
+- `run_annotations.sh`: Ordered 3D, camera, 2D, and occlusion extraction.
 - `ActionDetect.py`: Blender helper script to inspect armatures and animations within a `.blend` scene file.
-- `3D_extraction.py`: Converts .fbx files to .npz files containing 3D joint data. 
+- `3D_extraction.py`: Converts .fbx files to .npz files containing 3D joint data.
 - `camParams.py`: Extracts camera parameters used in the animations.
 - `2D_extraction.py`: Extracts 2D joint data by projecting the 3D joint data onto 2D space using camera parameters.
 - `occlusion.py`: Determines the presence of occlusions in the dataset.
 - `fbx2jason/`: Intended for storing .fbx files converted to JSON.
-- `regular/`: Default directory for placing sample .fbx files.
-   > [Refactor] By running `run.sh`, it may not be a necessary step.  
+- `regular/`: Historical input directory for the direct legacy workflow.
 
 ### Visualized Parts
 - `run_visualize.sh`: Unified pipeline script to batch `render camera frames` and `generate skeletal visualization videos`.
 - `export_image.py`: Blender background rendering script to export multi-camera frame sequences.
    > Also, you can render your image with your Blender interface.
-- `visualize_2d_video_v3.py`: OpenCV script to generate visualized video from specific render image folder.  
-features:  
+- `visualize_2d_video_v3.py`: OpenCV script to generate visualized video from specific render image folder.
+features:
    - overlay projected 2D skeletons
    - joint visibility indicators (with occlusion distinction)
    - subject tags on rendered frames.
-- `images/`: Default staging directory for rendered camera frames  
+- `images/`: Default staging directory for rendered camera frames
 
 ## Setup
 1. Clone or download this repository to your local machine.
-2. Ensure Blender is installed and added to your system PATH.
+2. Create the WSL controller environment from `environment.yml` and configure
+   the Linux path to `blender.exe` in `configs/examples/generation_example.yaml`.
 
 ### Directory Structure
-The scripts rely on relative paths (e.g., `../../BlendMimic3D/{subject}/...`) to locate and store motion capture annotations, camera calibration files, and dataset metadata.   
-It is recommended to organize your workspace as follows:  
+Each Run keeps legacy intermediate outputs separate from the final canonical
+sample. The working .blend sits two levels below that Run work directory.
 
-<pre>
-BlendMimic3D/                         # Workspace root
-├── BlendMimic3D/                     # Generated dataset output directory
-│   └── &lt;scenes&gt;/                     # e.g., S1, S2
-│       ├── subjects.txt
-│       ├── Cameras/
-│       ├── D3_Positions/
-│       ├── D2_Positions/
-│       └── Occlusions/
-└── preprocessing/
-    └── BlendMimic3D-DataExtractor/   # This repository
-        ├── run.sh
-        ├── run_visualize.sh
-        ├── ...
-</pre>
-
-## Quick Start
-
-It is assumed that `animation.blend` is provided and prepared by the user.   
-It may contains:  
-- Target Armatures (animated character rigs)
-- Scene obstacles / environment geometry
-- Cameras
-
-For most use cases, the entire extraction pipeline (3D joints, camera calibration, 2D projections, occlusion) can be executed automatically via `run.sh`:   
-
-```bash
-# Ensure the execution premission
-% chmod +x run.sh
-# It will call `ActionDetect.py`, and take turns do the annotation with all animations.  
-% ./run.sh -b animation.blend -s S1
+```text
+runs/RUN_.../
+|-- work/
+|   |-- preprocessing/BlendMimic3D-DataExtractor/working_scene.blend
+|   +-- BlendMimic3D/Pxxx/
+|-- config.yaml
+|-- scene_report.json
++-- validation.json
+output.root/SxxxPxxxRxxxAxxx/
 ```
 
-Once annotations are extracted, render the camera viewpoints and generate skeleton overlay videos via `run_visualized.sh`:  
+## Quick Start in WSL
+
+Run from the repository root. Scene and Action YAML files choose the clean
+template, validated FBX directory, and scene-specific placement. The example
+uses Linux `/mnt/c/...` paths; only arguments sent to Windows Blender are
+converted with `wslpath`.
 
 ```bash
-# Ensure the execution premission
-% chmod +x run_visualize.sh
-# `export_image.py` will render image and save to `images/S1`
-# Parse the directory (e.g: images/S1/cam0) to produced corresponding visualized videos.
-% ./run_visualize.sh -b animation.blend -s S1 -i images/S1 --show-subject
+conda env create -f environment.yml
+conda activate blendmimic3d-controller
+python generate_dataset.py --config configs/examples/generation_example.yaml --dry-run
+python generate_dataset.py --config configs/examples/generation_example.yaml
 ```
 
-Below are samples of the extracted 2D pose overlays and occlusion indicators across multiple camera viewpoints:  
+For a sequential batch, select one or more Scene and Action configs. Use
+`--dry-run` first, then remove it to generate. Each valid `PxxxAxxxRxxx.fbx`
+is passed to the single-sample generator once per selected Scene. Batch results
+are logged under `runs/BATCH_*/`; complete samples are published under the
+configured `output.root` only after validation.
+
+```bash
+bash run.sh \
+  --config configs/examples/generation_example.yaml \
+  --scene-config configs/scenes/S001_Industrial_Loft.yaml \
+  --action-config configs/actions/A001_walking.yaml \
+  --python "$(command -v python)" \
+  --dry-run
+```
+
+The generator stores one `runs/RUN_*/work/` workspace per sample. Windows
+Blender and WSL Bash resolve the legacy `../../BlendMimic3D/Pxxx/` output to
+the same Run workspace. `run_visualize.sh` uses WSL Python for OpenCV overlays.
+
+Below are samples of the extracted 2D pose overlays and occlusion indicators across multiple camera viewpoints:
 
 | Cam_0 (Perspective Front) | Cam_1 (Perspective Side) | Cam_2 (Perspective Side) |
 | :---: | :---: | :---: |
 | <img src="assets/four_people.gif" width="100%"> | <img src="assets/four_people_cam1.gif" width="100%"> | <img src="assets/four_people_cam2.gif" width="100%"> |
 | *Green: Visible / Red: Occluded* | *Green: Visible / Red: Occluded* | *Green: Visible / Red: Occluded* |
 
-## Usage Instructions
+## Legacy Manual Script Reference
+
+The examples below describe direct research-script invocation outside the
+current config-driven pipeline.
 
 ### General Usage
 Before running the scripts, download a sample .fbx file from your Blender animation ([link](https://www.immersivelimit.com/tutorials/export-animations-from-blender-to-unreal-engine)) and place it into the `regular` folder.
@@ -167,7 +169,7 @@ Before running the scripts, download a sample .fbx file from your Blender animat
 Contributions are welcome. Please open an issue or submit a pull request with your suggested changes.
 
 ## Citation
-If you use our code in your research, please cite our paper: 
+If you use our code in your research, please cite our paper:
 ```
 @inproceedings{lino20243d,
   title={3D Human Pose Estimation with Occlusions: Introducing BlendMimic3D Dataset and GCN Refinement},
@@ -183,4 +185,3 @@ This work was supported by LARSyS funding (DOI: 10.54499/LA/P/0083/2020, 10.5449
 <p align="center">
   <img src="https://github.com/FilipaLino/BlendMimic3D/assets/102179022/670897d0-1f7d-43e8-b63b-b2b961242730" width="50%" height="50%">
 </p>
-

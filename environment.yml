@@ -1,0 +1,12 @@
+name: blendmimic3d-controller
+
+channels:
+  - conda-forge
+
+dependencies:
+  - python=3.13
+  - numpy>=1.26
+  - pyyaml>=6.0
+  - opencv>=4.10
+
+# Blender and bpy are intentionally excluded. Blender uses its bundled Python.

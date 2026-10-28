@@ -199,7 +199,7 @@ if __name__ == "__main__":
     #camera_names = ['Camera_0'] #Same order as H3.6M dataset 
 
     # --- Dynamic fetch all camera objects ---
-    camera_names = [obj.name for obj in bpy.data.objects if obj.type == 'CAMERA']
+    camera_names = [obj.name for obj in bpy.context.scene.objects if obj.type == 'CAMERA']
     camera_names.sort() 
     print(f"Detected Cameras in Blender: {camera_names}")
 

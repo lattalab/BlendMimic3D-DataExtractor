@@ -1,0 +1,11 @@
+id: A001
+name: walking
+
+actor_count: 1
+interaction_type: none
+
+assets:
+  animated_fbx_dir: assets/animated_character/A001_walking
+
+start_points:
+  S001: walk_start_01

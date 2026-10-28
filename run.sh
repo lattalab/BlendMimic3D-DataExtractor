@@ -1,141 +1,180 @@
-#!/bin/bash
+#!/usr/bin/env bash
+# Sequential Scene, Action, and validated FBX batch controller.
 
-# ==========================================
-# Default Values
-# ==========================================
-# [Necessary] modify to your own path
-    # Winodws Path
-# BLENDER_PATH="C:/Program Files/Blender Foundation/Blender 5.1/blender.exe" 
-    # WSL Path
-BLENDER_PATH="/mnt/c/Program Files/Blender Foundation/Blender 5.1/blender.exe" 
-# Using default setting if not specify 
-ACTION_NAME=""
-JOINT_ID=""
-ARMATURE_NAME="Armature"
-SUBJECT="S1"
-TEMP_FILE="homefile.blend"
-BLEND_FILE="animation.blend"
+# -e: inproper exit code aborts the script
+# -u: unset variable aborts the script
+# -o: any command in a pipeline fails, the whole pipeline fails
+set -euo pipefail
 
-# ==========================================
-# 2. If you want to use command line arguments, you can specify them here
-# ==========================================
-while [[ "$#" -gt 0 ]]; do
-    case $1 in
-        -a|--action) ACTION_NAME="$2"; shift ;;
-        -s|--subject) SUBJECT="$2"; shift ;;
-        -j|--joint-id) JOINT_ID="$2"; shift ;;
-        -r|--armature) ARMATURE_NAME="$2"; shift ;;
-        -b|--blend-file) BLEND_FILE="$2"; shift ;;
-        -h|--help)
-            echo "Usage: ./run.sh -a <action_name> [options]"
-            echo "options:"
-            echo "  -a, --action       action_name (Necessary, EX: walking)"
-            echo "  -s, --subject      subject/person (Default: $SUBJECT)"
-            echo "  -j, --joint-id     Joint ID (Default: $JOINT_ID)"
-            echo "  -r, --armature     Armature name (Default: $ARMATURE_NAME)"
-            echo "  -b, --blend-file   Environment file for camera setting (Default: $BLEND_FILE)"
-            exit 0
-            ;;
-        *) echo "[Error] Unknown option: $1"; exit 1 ;;
+# sample usage (using EOF to print multiple lines)
+usage() {
+    cat <<'EOF'
+Usage: run.sh --config BASE.yaml --scene-config SCENE.yaml --action-config ACTION.yaml [options]
+
+Repeat --scene-config and --action-config to generate their cross product.
+Options:
+  --python FILE         WSL controller Python (default: PYTHON_PATH or python3).
+  --dry-run             Preflight every single-sample request without generating.
+  -h, --help            Show this help.
+EOF
+}
+
+fail() { printf '[ERROR] %s\n' "$1" >&2; exit 2; }
+
+
+CONFIG=""
+PYTHON_EXECUTABLE="${PYTHON_PATH:-python3}"
+DRY_RUN=false
+# Bash Array
+SCENE_CONFIGS=()
+ACTION_CONFIGS=()
+
+#   ./run.sh \
+#   --config configs/examples/generation_example.yaml \
+#   --scene-config configs/scenes/S001_Industrial_Loft.yaml \
+#   --action-config configs/actions/A001_walking.yaml \
+#   --dry-run
+while (($#)); do
+    case "$1" in
+        # acknowledge valid argument
+        --config|--scene-config|--action-config|--python)
+            (($# >= 2)) || fail "missing value for $1"
+            # record corresponding value
+            case "$1" in
+                --config) CONFIG="$2" ;;
+                --scene-config) SCENE_CONFIGS+=("$2") ;;
+                --action-config) ACTION_CONFIGS+=("$2") ;;
+                --python) PYTHON_EXECUTABLE="$2" ;;
+            esac
+            # move to the next argument pair
+            shift 2 ;;
+        --dry-run) DRY_RUN=true; shift ;;
+        -h|--help) usage; exit 0 ;;
+        *) fail "unknown option: $1" ;;
     esac
-    shift
 done
 
-# [Add] MetaData files for manage subjects order
-SCENE_DIR="../../BlendMimic3D/${SUBJECT}"
-META_FILE="${SCENE_DIR}/subjects.txt"
+# if the config are missing, report fail
+[[ -n "$CONFIG" && ${#SCENE_CONFIGS[@]} -gt 0 && ${#ACTION_CONFIGS[@]} -gt 0 ]] || fail "base, scene and action configs are required"
 
-# ==========================================
-# 3. Check required parameters
-# ==========================================
-# 缺乏必要參數的時候
-if [ -z "$ACTION_NAME" ] || [ -z "$ARMATURE_NAME" ]; then
-    echo "=========================================="
-    echo "[AUTO MODE] Scanning scene: $BLEND_FILE"
-    echo "=========================================="
+# enter the script directory to ensure relative paths are correct
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+cd -- "$SCRIPT_DIR"
 
-    # Create the scene directory and initialize the metadata file
-    mkdir -p "$SCENE_DIR"
-    # Create empty metadata file
-    > "$META_FILE"
-    echo "[*] Initialized metadata file: $META_FILE"
+# check for required files and executables
+[[ -f generate_dataset.py ]] || fail "root generate_dataset.py is missing"
+[[ -f "$CONFIG" ]] || fail "base config is missing: $CONFIG"
+# bash array expansion to check each config file exists
+for path in "${SCENE_CONFIGS[@]}" "${ACTION_CONFIGS[@]}"; do
+    [[ -f "$path" ]] || fail "selected config is missing: $path"
+done
+# check python dependency 
+if [[ "$PYTHON_EXECUTABLE" == */* ]]; then
+    [[ -f "$PYTHON_EXECUTABLE" ]] || fail "WSL Python is missing: $PYTHON_EXECUTABLE"
+else
+    command -v "$PYTHON_EXECUTABLE" >/dev/null 2>&1 || fail "WSL Python is missing: $PYTHON_EXECUTABLE"
+fi
 
-    # Fetch target armatures and actions from the Blender file
-    DETECTED_TARGETS=$("$BLENDER_PATH" --background "$BLEND_FILE" --python ActionDetect.py | tr -d '\r' | grep "^TARGET:")
+# create a batch record directory and log file
+CONFIG="$(realpath -- "$CONFIG")"
+BATCH_ID="BATCH_$(date -u +%Y%m%dT%H%M%S)_$$"
+BATCH_DIR="runs/$BATCH_ID"
+mkdir -p -- runs
+mkdir -- "$BATCH_DIR" || fail "batch record already exists: $BATCH_DIR"
+BATCH_LOG="$BATCH_DIR/batch.log"
+log() { printf '%s\n' "$*" | tee -a "$BATCH_LOG"; }
+log "BATCH $BATCH_ID config=$CONFIG dry_run=$DRY_RUN"
 
-    if [ -z "$DETECTED_TARGETS" ]; then
-        echo "[Error] No active Armatures with Actions found in $BLEND_FILE!"
-        exit 1
+# scan the action config for animated FBX files and validate their names
+scan_action_fbxs() {
+    "$PYTHON_EXECUTABLE" -c '
+import pathlib, re, sys, yaml
+root = pathlib.Path(sys.argv[1])
+source = pathlib.Path(sys.argv[2])
+action = yaml.safe_load(source.read_text(encoding="utf-8"))
+action_id = action["id"]
+if re.fullmatch(r"A\d{3}", action_id) is None:
+    raise ValueError(f"invalid action ID: {action_id}")
+folder = pathlib.Path(action["assets"]["animated_fbx_dir"])
+folder = folder if folder.is_absolute() else root / folder
+if not folder.is_dir():
+    raise FileNotFoundError(f"animated FBX directory is missing: {folder}")
+for item in sorted(folder.glob("*.fbx")):
+    if re.fullmatch(r"P\d{3}" + action_id + r"R\d{3}\.fbx", item.name):
+        print(item.resolve().as_posix())
+' "$SCRIPT_DIR" "$1"
+}
+
+# process each scene and action
+success=0
+failure=0
+declare -A seen_samples=()
+# run each scene
+for scene in "${SCENE_CONFIGS[@]}"; do
+    scene="$(realpath -- "$scene")"
+    if scene_id=$("$PYTHON_EXECUTABLE" -c 'import pathlib,re,sys,yaml; value=yaml.safe_load(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))["id"]; assert re.fullmatch(r"S\d{3}",value), "invalid scene ID"; print(value)' "$scene" 2>> "$BATCH_LOG"); then
+        :
+    else
+        log "FAIL scene_config=$scene: cannot read a valid Sxxx ID"
+        ((failure += 1))
+        continue
     fi
+    scene_id="${scene_id%$'\r'}"
 
-    SUBJECT_COUNT=1
-    for target in $DETECTED_TARGETS; do
-        # Parse TARGET:Armature:Action
-        DETECTED_ARM=$(echo "$target" | cut -d':' -f2)
-        DETECTED_ACT=$(echo "$target" | cut -d':' -f3)
-
-        # If specified subject is empty, assign a default subject name based on the count
-        if [ -n "$SUBJECT" ]; then
-            TARGET_SUB="$SUBJECT"
+    # read action config to get all the animated FBX
+    for action in "${ACTION_CONFIGS[@]}"; do
+        action="$(realpath -- "$action")"
+        if fbx_list=$(scan_action_fbxs "$action" 2>> "$BATCH_LOG"); then
+            :
         else
-            TARGET_SUB="S${SUBJECT_COUNT}"
+            log "FAIL scene=$scene_id action_config=$action: FBX scan failed"
+            ((failure += 1))
+            continue
+        fi
+        if [[ -z "$fbx_list" ]]; then
+            log "FAIL scene=$scene_id action_config=$action: no valid animated FBX"
+            ((failure += 1))
+            continue
         fi
 
-        # register this action to the metadata file (append mode)
-        echo "$DETECTED_ACT" >> "$META_FILE"
-        echo "[+] Registered Subject S${SUBJECT_COUNT} -> Action: $DETECTED_ACT in metadata."
+        # process each FBX file
+        mapfile -t fbxs <<< "$fbx_list"
+        for fbx in "${fbxs[@]}"; do
+            
+            fbx="${fbx%$'\r'}"
+            filename="${fbx##*/}"
+            subject="${filename:0:4}"
+            action_id="${filename:4:4}"
+            replication="${filename:8:4}"
+            sample_id="${scene_id}${subject}${replication}${action_id}"
+            
+            if [[ -n "${seen_samples[$sample_id]:-}" ]]; then
+                log "FAIL $sample_id: duplicate selection in this batch"
+                ((failure += 1))
+                continue
+            fi
 
-        echo -e "\n------------------------------------------"
-        echo ">> Auto Dispatch: Subject=$TARGET_SUB | Armature=$DETECTED_ARM | Action=$DETECTED_ACT"
-        echo "------------------------------------------"
+            seen_samples[$sample_id]=1
+            run_id="RUN_${sample_id}_${BATCH_ID}"
 
-        # recursively call run.sh with detected parameters
-        "$0" -b "$BLEND_FILE" -r "$DETECTED_ARM" -a "$DETECTED_ACT" -s "$TARGET_SUB" -j "$JOINT_ID"
-
-        SUBJECT_COUNT=$((SUBJECT_COUNT + 1))
+            # calling the generate_dataset.py script with the appropriate arguments
+            command=("$PYTHON_EXECUTABLE" "$SCRIPT_DIR/generate_dataset.py"
+                --config "$CONFIG" --scene-config "$scene" --action-config "$action"
+                --fbx "$fbx" --run-id "$run_id")
+            if [[ "$DRY_RUN" == true ]]; then command+=(--dry-run); fi
+            log "START $sample_id fbx=$fbx run=$run_id"
+            if "${command[@]}" >> "$BATCH_LOG" 2>&1; then
+                log "PASS $sample_id"
+                ((success += 1))
+            else
+                status=$?
+                log "FAIL $sample_id exit_code=$status"
+                ((failure += 1))
+            fi
+        done
     done
+done
 
-    echo -e "\n=========================================="
-    echo "[AUTO MODE] All detected subjects processed successfully!"
-    echo "=========================================="
-    exit 0
-fi
-
-# ==========================================
-# 4. Check if Blender executable exists
-# ==========================================
-echo "=========================================="
-echo "Working on: $ACTION_NAME"
-echo "Subject: $SUBJECT | Joint ID: $JOINT_ID | Armature: $ARMATURE_NAME"
-echo "Animation file: $BLEND_FILE"
-echo "=========================================="
-
-# The following command follow the guideline.
-echo -e "\n[1/5] Extracting 3D skeleton data..."
-"$BLENDER_PATH" --background "$BLEND_FILE" --python 3D_extraction.py -- --joint-id "$JOINT_ID" --armature-name "$ARMATURE_NAME" --subject "$SUBJECT" --action "$ACTION_NAME"
-
-echo -e "\n[2/5] Extracting camera parameters..."
-"$BLENDER_PATH" --background "$BLEND_FILE" --python camParams.py -- "$SUBJECT"
-
-echo -e "\n[3/5] Calculating 2D projection coordinates..."
-"$BLENDER_PATH" --background "$BLEND_FILE" --python 2D_extraction.py -- "$SUBJECT" "$ACTION_NAME"
-
-echo -e "\n[4/5] Handling Occlusion ..."
-"$BLENDER_PATH" --background "$BLEND_FILE" --python occlusion.py -- --joint-id "$JOINT_ID" --armature-name "$ARMATURE_NAME" --subject "$SUBJECT" --action "$ACTION_NAME"
-
-# homefile.blend
-echo -e "\n[5/5] Cleaning up the environment..."
-if [ -f "$TEMP_FILE" ]; then
-    rm "$TEMP_FILE"
-    echo "[-] Deleted temp file: $TEMP_FILE"
-fi
-
-# homefile.blend1
-if [ -f "${TEMP_FILE}1" ]; then
-    rm "${TEMP_FILE}1"
-    echo "[-] Deleted backup file: ${TEMP_FILE}1"
-fi
-
-echo -e "\n=========================================="
-echo "Processing complete! All data has been output to the specified directory."
-echo "=========================================="
+# summarize the batch results
+log "SUMMARY success=$success failure=$failure log=$BATCH_LOG"
+((failure == 0 && success > 0))

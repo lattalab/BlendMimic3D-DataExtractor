@@ -1,0 +1,10 @@
+id: S001
+name: Industrial_Loft
+scene_file: assets/scene_templates/S001_Industrial_Loft.blend
+
+placements:
+  walk_start_01:
+    # Provisional scene placement; not yet visually approved in Blender.
+    location: [0.0, 0.0, 0.0]
+    rotation_deg: [0.0, 0.0, 90.0]
+    scale: 1.0

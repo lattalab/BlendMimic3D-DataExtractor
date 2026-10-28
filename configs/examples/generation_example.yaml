@@ -1,0 +1,38 @@
+dataset_version: "0.1"
+run_id: RUN_S001P001R001A001_001
+scene_config: configs/scenes/S001_Industrial_Loft.yaml
+action_config: configs/actions/A001_walking.yaml
+
+subject:
+  id: P001
+
+replication:
+  id: R001
+
+render:
+  enabled: true
+  width: 1920
+  height: 1080
+  fps: 30
+
+annotations:
+  pose3d: true
+  pose2d: true
+  camera_parameters: true
+  visibility: true
+
+videos:
+  enabled: true
+
+pipeline:
+  blender_executable: "/mnt/c/Program Files/Blender Foundation/Blender 5.1/blender.exe"
+  armature_name: GeneratedCharacter
+  joint_id: ""
+
+output:
+  # dataset root folder
+  root: "/mnt/c/Users/vlva8/Desktop/DataGeneration/BlendMimic3D"
+  # temporary runs folder for data generation
+  runs_root: runs
+  overwrite: false
+  save_working_blend: false

@@ -61,9 +61,18 @@ def is_keypoint_out_of_view(keypoint, keypoint_location, camera, is_fisheye=Fals
         d = np.sqrt(p_cam.x**2 + p_cam.y**2)
         theta = np.arctan2(d, z_depth)
 
+        # Blender fisheye_fov is the full field of view in radians
+        fisheye_fov = camera.data.fisheye_fov
+        if fisheye_fov is None:
+            print(f"[WARN] Cannot read fisheye FOV from camera '{camera.name}'.")
+            print("Fallback to 180 degrees.")
+            fisheye_fov = np.pi  # 180 degrees in radians
+
+        half_fov = fisheye_fov / 2.0
+
         # Check if incident angle exceeds 180-degree hemispherical FOV (theta > 90 degrees)
         # fisheye is at most +90 or -90 degrees, so if theta > 90 degrees, it is out of view
-        return theta > (np.pi / 2.0)
+        return theta > half_fov
     else:
         # Project the 3D location of the keypoint onto the camera's image plane
         projected_co = bpy_extras.object_utils.world_to_camera_view(scene, camera, keypoint_location)
@@ -105,16 +114,22 @@ def is_occluded(keypoint, kpt_global_location, camera, armature):
     scene = bpy.context.scene
     depsgraph = bpy.context.evaluated_depsgraph_get()
     #camera = bpy.context.scene.camera
-   
-    # Calculate the direction from the camera to the keypoint
-    direction = (kpt_global_location - camera.location).normalized()
 
     # Define the ray's starting and ending points
-    ray_start = camera.location
+    ray_start = camera.matrix_world.translation
     ray_end = kpt_global_location
+
+    # Calculate the direction from the camera to the keypoint
+    ray_vector = ray_end - ray_start
+    joint_distance = ray_vector.length
+
+    # Avoid invalid zero-length rays
+    if joint_distance <= 1e-6:
+        return False
     
     # Perform the ray casting
-    result, location, normal, index, object, matrix = scene.ray_cast(depsgraph,ray_start, direction)
+    direction = ray_vector.normalized()
+    result, location, normal, index, object, matrix = scene.ray_cast(depsgraph, ray_start, direction, distance=joint_distance)
     # print(keypoint.name)
     # print(object.name) 
     
@@ -190,7 +205,7 @@ if __name__ == '__main__':
     # List of camera names
     # [Modified when needed] List of camera names, matching with your blender object name!
     # camera_names = ['Camera_0', 'Camera_1', 'Camera_2', 'Camera_3'] #Same order as H3.6M dataset 
-    camera_names = [obj.name for obj in bpy.data.objects if obj.type == 'CAMERA']
+    camera_names = [obj.name for obj in bpy.context.scene.objects if obj.type == 'CAMERA']
     camera_names.sort() 
 
     # Replace 'Armature' with the actual name of your armature object

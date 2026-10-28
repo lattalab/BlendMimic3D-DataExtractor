@@ -5,7 +5,7 @@ import argparse
 import re
 
 # sample usage
-# python3 visualize_2d_video_v3.py --cam Cam_0 --img_folder images/side_view --output Cam0_visualization.avi
+# python3 visualize_2d_video_v3.py --scene_dir "../../BlendMimic3D/S6" --cam Cam_0 --img_folder images/Real --output Cam0_visualization.avi
 
 # --- Define Skeleton Connections (using Joint Indices) ---
 # Format: (Start_Node_Index, End_Node_Index)
@@ -75,6 +75,47 @@ def draw_label(img, text, pos, bg_color=None, text_color=None):
         cv2.putText(img, text, (text_x, text_y), font, scale, outline_color, outline_thickness, cv2.LINE_AA)
         cv2.putText(img, text, (text_x, text_y), font, scale, text_color, thickness, cv2.LINE_AA)
 
+
+def draw_pose_frame(image, pose, visibility, hide_occluded=False):
+    """Draw the existing skeleton and joint visibility colors on one frame.
+
+    Args:
+        image: OpenCV BGR image to modify in place.
+        pose: One person's projected (x, y) joint coordinates.
+        visibility: One visibility value per joint; 1 is visible and 0 is occluded.
+        hide_occluded: Skip occluded joints and their connected lines when true.
+
+    Returns:
+        The same image with the legacy skeleton overlay applied.
+    """
+    # Draw skeleton lines in the existing joint order.
+    for connection in SKELETON_CONNECTIONS:
+        idx1, idx2 = connection
+        if idx1 < len(pose) and idx2 < len(pose):
+            vis1 = visibility[idx1]
+            vis2 = visibility[idx2]
+            if hide_occluded and (vis1 == 0 or vis2 == 0):
+                continue
+
+            pt1 = (int(pose[idx1][0]), int(pose[idx1][1]))
+            pt2 = (int(pose[idx2][0]), int(pose[idx2][1]))
+            if (pt1[0] > 0 or pt1[1] > 0) and (pt2[0] > 0 or pt2[1] > 0):
+                line_color = (0, 255, 0) if (vis1 == 1 and vis2 == 1) else (0, 0, 255)
+                cv2.line(image, pt1, pt2, color=line_color, thickness=3)
+
+    # Draw white-bordered green/red joints using the same origin check.
+    for idx, joint in enumerate(pose):
+        x, y = int(joint[0]), int(joint[1])
+        is_visible = visibility[idx]
+        if hide_occluded and is_visible == 0:
+            continue
+        if x > 0 or y > 0:
+            dot_color = (0, 255, 0) if is_visible == 1 else (0, 0, 255)
+            cv2.circle(image, (x, y), radius=7, color=(255, 255, 255), thickness=-1)
+            cv2.circle(image, (x, y), radius=5, color=dot_color, thickness=-1)
+    return image
+
+
 def main():
     # --- 1. Setup Command Line Arguments ---
     parser = argparse.ArgumentParser(description="Visualize 2D poses on rendered images.")
@@ -95,17 +136,33 @@ def main():
     parser.add_argument("--output", type=str, default="pose_visualization.avi", help="Output video filename.")
     # show the subject label (specified to show)
     parser.add_argument("-s", "--subject", action="store_true", help="(Optional) If set, the subject label will be drawn on the video.")
+    parser.add_argument("--fps", type=float, default=30.0, help="Output video FPS (default: 30).")
+    parser.add_argument("--strict", action="store_true", help="Require exact frame, joint and visibility alignment.")
+    parser.add_argument("--frame-start", type=int)
+    parser.add_argument("--frame-end", type=int)
+    parser.add_argument("--width", type=int)
+    parser.add_argument("--height", type=int)
 
     args = parser.parse_args()
+    if args.fps <= 0:
+        parser.error("--fps must be positive")
+    if args.strict and (args.frame_start is None or args.frame_end is None or
+                        args.width is None or args.height is None or
+                        args.frame_end < args.frame_start or args.width <= 0 or args.height <= 0):
+        parser.error("strict mode requires a valid frame range and resolution")
 
     # To measure the order of subjects, read the metadata file to get the action names in order
     metadata_file = os.path.join(args.scene_dir, "subjects.txt")
     if not os.path.exists(metadata_file):
+        if args.strict:
+            raise FileNotFoundError(f"subjects.txt is missing: {metadata_file}")
         print(f"[ERROR] Metadata file not found: {metadata_file}")
         return
 
     with open(metadata_file, 'r') as f:
         action_names = [line.strip() for line in f if line.strip()]
+    if args.strict and len(action_names) != 1:
+        raise ValueError(f"strict mode expects one action in subjects.txt, found {len(action_names)}")
 
     # Store the argument
     npz_path = [os.path.join(args.scene_dir, "D2_Positions", act, "2D_positions.npz") for act in action_names]
@@ -130,6 +187,8 @@ def main():
     
         # Error detection: avoid retrieve unknown camera
         if cam_name not in data:
+            if args.strict:
+                raise ValueError(f"camera {cam_name} missing from {npz_path[p_idx]}")
             print(f"ERROR: Cannot find the camera inside NPZ file '{cam_name}'!")
             print(f"Current available camera in NPZ: {list(data.keys())}")
             return
@@ -139,6 +198,8 @@ def main():
         poses_2d_list.append(poses_2d)
         # getting total num of frame for this person
         current_frames = poses_2d.shape[0]
+        if args.strict and (poses_2d.shape != (args.frame_end - args.frame_start + 1, 20, 2)):
+            raise ValueError(f"2D pose shape mismatch for {cam_name}: {poses_2d.shape}")
         max_frames = max(max_frames, poses_2d.shape[0])
         print(f"[*] Loaded 2D poses for subject {p_idx + 1}: {current_frames} frames.")
 
@@ -146,13 +207,19 @@ def main():
         visibilities = None     # shape: (frames, 20) or (frames, 17) depending on the occlusion data
         if occ_npz_path:
             if not os.path.exists(occ_npz_path[p_idx]):
+                if args.strict:
+                    raise ValueError(f"visibility file is missing: {occ_npz_path[p_idx]}")
                 print(f"[WARN] Occlusion file not found at {occ_npz_path[p_idx]}. Proceeding without occlusion effects.")
             else:
                 occ_data = np.load(occ_npz_path[p_idx], allow_pickle=True)
                 if cam_name not in occ_data:
+                    if args.strict:
+                        raise ValueError(f"camera {cam_name} missing from {occ_npz_path[p_idx]}")
                     print(f"[WARN] Camera '{cam_name}' not found in Occlusion NPZ. Proceeding without occlusion effects.")
                 else:
                     visibilities = occ_data[cam_name]
+                    if args.strict and visibilities.shape != (current_frames, 20):
+                        raise ValueError(f"visibility shape mismatch for {cam_name}: {visibilities.shape}")
                     
                     # Sanity check: Ensure frame counts match
                     if visibilities.shape[0] != current_frames:
@@ -174,26 +241,47 @@ def main():
     )
 
     if not image_files:
+        if args.strict:
+            raise ValueError(f"no RGB images in {img_folder}")
         print(f"[ERROR] Cannot find any PNG images in folder: {img_folder}")
         return
 
+    if args.strict:
+        frame_numbers = []
+        for name in image_files:
+            match = re.fullmatch(r"(\d+)\.png", name, re.IGNORECASE)
+            if match is None:
+                raise ValueError(f"strict mode requires numbered PNG frames: {name}")
+            frame_numbers.append(int(match.group(1)))
+        expected_numbers = list(range(args.frame_start, args.frame_end + 1))
+        if frame_numbers != expected_numbers:
+            raise ValueError(f"RGB frame range mismatch: expected {args.frame_start}..{args.frame_end}, got {frame_numbers[:3]}...{frame_numbers[-3:]}")
+
     # Retrieve video resolution from the first frame
-    total_render_frames = min(len(image_files), max_frames)
+    total_render_frames = len(image_files) if args.strict else min(len(image_files), max_frames)
 
     first_img_name = image_files[0]
     first_img_path = os.path.join(img_folder, first_img_name)
     first_img = cv2.imread(first_img_path)
     
     if first_img is None:
+        if args.strict:
+            raise ValueError(f"could not decode RGB frame: {first_img_path}")
         print(f"[ERROR] Cannot find the reference image for resolution: {first_img_path}")
         return
         
     height, width, layers = first_img.shape
     size = (width, height)
+    if args.strict and size != (args.width, args.height):
+        raise ValueError(f"RGB resolution mismatch: expected {(args.width, args.height)}, got {size}")
     
     # Initialize OpenCV VideoWriter (Codec: XVID, FPS: 30.0)
     fourcc = cv2.VideoWriter_fourcc(*'XVID')
-    out = cv2.VideoWriter(output_video_path, fourcc, 30.0, size)
+    if args.strict and os.path.exists(output_video_path):
+        raise FileExistsError(f"annotated video already exists: {output_video_path}")
+    out = cv2.VideoWriter(output_video_path, fourcc, args.fps, size)
+    if not out.isOpened():
+        raise RuntimeError(f"could not open annotated video writer: {output_video_path}")
     
     print(f"[*] Initializing rendering for {cam_name}...")
     print(f"[*] Output path: {output_video_path}")
@@ -206,8 +294,14 @@ def main():
         # Read the image
         img = cv2.imread(img_path)
         if img is None:
+            if args.strict:
+                out.release()
+                raise ValueError(f"could not decode RGB frame: {img_path}")
             print(f"[WARN] Image {img_path} not found. Skipping frame {i + 1}.")
             continue
+        if args.strict and (img.shape[1], img.shape[0]) != size:
+            out.release()
+            raise ValueError(f"RGB resolution changed at {img_path}")
 
         # draw for each person
         for p_idx in range(num_people):
@@ -224,46 +318,9 @@ def main():
             visibilities = visibilities_list[p_idx]
             current_vis = visibilities[i] if visibilities is not None else np.ones(current_pose.shape[0])
         
-            # --- 5-1. Draw Skeleton Lines ---
-            for connection in SKELETON_CONNECTIONS:
-                idx1, idx2 = connection
-                
-                # Boundary check to prevent index out of range errors
-                if idx1 < len(current_pose) and idx2 < len(current_pose):
-                    # Check visibility for both ends of the bone
-                    vis1 = current_vis[idx1]
-                    vis2 = current_vis[idx2]
-                
-                    # If 'hide_occluded' is enabled and ANY of the two joints are occluded, skip drawing this line
-                    if hide_occluded and (vis1 == 0 or vis2 == 0):
-                        continue
+            draw_pose_frame(img, current_pose, current_vis, hide_occluded)
 
-                    pt1 = (int(current_pose[idx1][0]), int(current_pose[idx1][1]))
-                    pt2 = (int(current_pose[idx2][0]), int(current_pose[idx2][1]))
-                    
-                    # Sanity check: Avoid drawing lines to the origin (0,0) which indicates missing data
-                    if (pt1[0] > 0 or pt1[1] > 0) and (pt2[0] > 0 or pt2[1] > 0):
-                        # Determine line color: Black if both visible, Red if any part is occluded
-                        line_color = (0, 255, 0) if (vis1 == 1 and vis2 == 1) else (0, 0, 255)
-                        cv2.line(img, pt1, pt2, color=line_color, thickness=3)
-        
-            # --- 5-2. Draw Joint Points ---
-            for idx, joint in enumerate(current_pose):
-                x, y = int(joint[0]), int(joint[1])
-                is_visible = current_vis[idx]
-
-                # If 'hide_occluded' is enabled and the joint is occluded, skip drawing this point
-                if hide_occluded and is_visible == 0:
-                    continue
-                
-                # Sanity check: Avoid rendering the origin (0,0)
-                if x > 0 or y > 0:
-                    # Determine dot color: Black if visible, Red if occluded
-                    dot_color = (0, 255, 0) if is_visible == 1 else (0, 0, 255)
-                    cv2.circle(img, (x, y), radius=7, color=(255, 255, 255), thickness=-1) # White border for better visibility
-                    cv2.circle(img, (x, y), radius=5, color=dot_color, thickness=-1)       # Inner dot color based on visibility
-
-            # --- 5-3. Draw Subject Label ---
+            # Draw the optional subject label after the skeleton overlay.
             # draw when the all keypoints is visible
             valid_joints = current_pose[(current_pose[:, 0] > 0) & (current_pose[:, 1] > 0)]
 

@@ -1,8 +1,21 @@
-fbx2json/*
-!fbx2json/.gitkeep
 video/*
 !video/.gitkeep
-images/*
-!images/.gitkeep
+# images/*
+# !images/.gitkeep
 *.blend
 *.avi
+
+# some data generation files temporarily stored in the repo for convenience (ignore to git push)
+assets/action_template/*
+assets/animated_character/*
+assets/character_template/*
+assets/scene_template/*
+
+# Generated pipeline outputs. Keep only their documentation files.
+runs/*
+!runs/README.md
+
+tests/*
+
+__pycache__/
+*.py[cod]
